@@ -2,14 +2,22 @@
 // Self-contained MCP stdio server — no npm dependencies needed
 import { createInterface } from "readline";
 import { execFileSync } from "child_process";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { homedir } from "os";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
+const IS_MACOS = process.platform === "darwin";
 
 // macOS Keychain entries
 const KC_ACCOUNT = "devin";
 const KC_TOKEN   = "claude-devin-token";
 const KC_ORG     = "claude-devin-orgid";
 
+// Linux fallback: config file
+const CONFIG_DIR  = `${homedir()}/.config/claude-plugins/devin`;
+const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
+
+// --- macOS Keychain ---
 function keychainGet(service) {
   try {
     return execFileSync(
@@ -30,11 +38,43 @@ function keychainSet(service, value) {
   );
 }
 
+// --- Linux config file fallback ---
+function configFileGet(key) {
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    return cfg[key] || null;
+  } catch {
+    return null;
+  }
+}
+
+function configFileSet(token, orgId) {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify({ DEVIN_API_TOKEN: token, DEVIN_ORG_ID: orgId }, null, 2),
+    { mode: 0o600 }
+  );
+}
+
+// --- Unified load/save ---
 function loadConfig() {
+  if (IS_MACOS) {
+    return { token: keychainGet(KC_TOKEN), orgId: keychainGet(KC_ORG) };
+  }
   return {
-    token: keychainGet(KC_TOKEN),
-    orgId: keychainGet(KC_ORG),
+    token: configFileGet("DEVIN_API_TOKEN"),
+    orgId: configFileGet("DEVIN_ORG_ID"),
   };
+}
+
+function saveConfig(token, orgId) {
+  if (IS_MACOS) {
+    keychainSet(KC_TOKEN, token);
+    keychainSet(KC_ORG, orgId);
+  } else {
+    configFileSet(token, orgId);
+  }
 }
 
 let config = loadConfig();
@@ -137,20 +177,23 @@ async function callTool(name, args = {}) {
       return { error: `Connection failed: ${e.message}` };
     }
 
-    // Save to macOS Keychain
+    // Save credentials (Keychain on macOS, config file on Linux)
     try {
-      keychainSet(KC_TOKEN, token);
-      keychainSet(KC_ORG, org_id);
+      saveConfig(token, org_id);
     } catch (e) {
-      return { error: `Failed to save to Keychain: ${e.message}` };
+      return { error: `Failed to save credentials: ${e.message}` };
     }
 
     // Reload so subsequent tool calls use new credentials
     reloadConfig();
 
+    const storage = IS_MACOS
+      ? "macOS Keychain"
+      : `config file (${CONFIG_PATH}, mode 0600)`;
+
     return {
       ok: true,
-      message: `Credentials saved to macOS Keychain and verified. Found ${sessionCount} session(s). You're ready to use Devin.`,
+      message: `Credentials saved to ${storage} and verified. Found ${sessionCount} session(s). You're ready to use Devin.`,
     };
   }
 
