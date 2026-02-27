@@ -62,6 +62,15 @@ test("marketplace.json references plugin by name matching plugin.json", () => {
   assert.ok(names.includes(plugin.name), `marketplace missing plugin "${plugin.name}"`);
 });
 
+test("marketplace.json version matches plugin.json version", () => {
+  const plugin = parseJSON(".claude-plugin/plugin.json");
+  const market = parseJSON(".claude-plugin/marketplace.json");
+  const entry = market.plugins.find((p) => p.name === plugin.name);
+  assert.ok(entry, `plugin "${plugin.name}" not found in marketplace`);
+  assert.equal(entry.version, plugin.version,
+    `marketplace has version ${entry.version}, plugin.json has ${plugin.version} — keep them in sync`);
+});
+
 test(".mcp.json defines devin-mcp server", () => {
   const mcp = parseJSON(".mcp.json");
   assert.ok(mcp.mcpServers?.["devin-mcp"], "missing devin-mcp server");

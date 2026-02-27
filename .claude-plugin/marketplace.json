@@ -6,6 +6,7 @@
   "plugins": [
     {
       "name": "devin",
+      "version": "0.2.2",
       "description": "Delegate coding tasks to Devin AI as a sub-agent",
       "source": "./."
     }
