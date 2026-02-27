@@ -3,10 +3,16 @@
 import { createInterface } from "readline";
 import { readFileSync, existsSync } from "fs";
 import { homedir } from "os";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+import { spawn } from "child_process";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Load credentials: env vars first, then config file fallback
+// Does NOT exit — returns nulls so the server can still start and offer setup tool
 function loadConfig() {
   let token = process.env.DEVIN_API_TOKEN;
   let orgId = process.env.DEVIN_ORG_ID;
@@ -24,25 +30,21 @@ function loadConfig() {
     }
   }
 
-  if (!token) {
-    process.stderr.write("Error: DEVIN_API_TOKEN not set. Run /devin-setup to configure.\n");
-    process.exit(1);
-  }
-  if (!orgId) {
-    process.stderr.write("Error: DEVIN_ORG_ID not set. Run /devin-setup to configure.\n");
-    process.exit(1);
-  }
-
-  return { token, orgId };
+  return { token: token || null, orgId: orgId || null };
 }
 
-const { token, orgId } = loadConfig();
+let config = loadConfig();
+
+// Reload credentials from disk (called after setup completes)
+function reloadConfig() {
+  config = loadConfig();
+}
 
 // --- Devin API helper ---
 async function devinRequest(method, path, body = null) {
   const res = await fetch(`${DEVIN_API_BASE}${path}`, {
     method,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`Devin API ${res.status}: ${await res.text()}`);
@@ -51,6 +53,11 @@ async function devinRequest(method, path, body = null) {
 
 // --- Tool definitions ---
 const TOOLS = [
+  {
+    name: "setup_devin",
+    description: "Launch an interactive browser UI to configure Devin API credentials. Opens http://localhost:3747 automatically.",
+    inputSchema: { type: "object", properties: {} },
+  },
   {
     name: "list_devin_sessions",
     description: "List recent Devin sessions with their statuses.",
@@ -96,12 +103,51 @@ const TOOLS = [
 
 // --- Tool handler ---
 async function callTool(name, args = {}) {
+  // setup_devin — works even without credentials
+  if (name === "setup_devin") {
+    const setupScript = join(__dirname, "..", "scripts", "setup-server.js");
+    if (!existsSync(setupScript)) {
+      return { error: "setup-server.js not found. Please reinstall the plugin." };
+    }
+    // Spawn detached so it outlives this process; open browser automatically
+    const child = spawn("node", [setupScript], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return {
+      message: "✅ Setup UI launched! Your browser should open automatically to http://localhost:3747\n\nEnter your Devin API Token and Organization ID in the form. After saving, run /devin-setup again or retry your command.",
+    };
+  }
+
+  // All other tools require credentials
+  if (!config.token || !config.orgId) {
+    // Try reloading in case user just completed setup
+    reloadConfig();
+  }
+  if (!config.token || !config.orgId) {
+    return {
+      error: "Devin credentials not configured. Call the setup_devin tool to open the browser setup UI.",
+    };
+  }
+
+  const { token, orgId } = config;
   switch (name) {
-    case "list_devin_sessions":   return devinRequest("GET", `/organizations/${orgId}/sessions?limit=${args.limit || 10}`);
-    case "create_devin_session":  return devinRequest("POST", `/organizations/${orgId}/sessions`, { prompt: args.prompt, ...(args.idempotent_client_id && { idempotent_client_id: args.idempotent_client_id }) });
-    case "get_devin_session":     return devinRequest("GET", `/organizations/${orgId}/sessions/${args.session_id}`);
-    case "send_devin_message":    return devinRequest("POST", `/organizations/${orgId}/sessions/${args.session_id}/messages`, { message: args.message });
-    default: throw new Error(`Unknown tool: ${name}`);
+    case "list_devin_sessions":
+      return devinRequest("GET", `/organizations/${orgId}/sessions?limit=${args.limit || 10}`);
+    case "create_devin_session":
+      return devinRequest("POST", `/organizations/${orgId}/sessions`, {
+        prompt: args.prompt,
+        ...(args.idempotent_client_id && { idempotent_client_id: args.idempotent_client_id }),
+      });
+    case "get_devin_session":
+      return devinRequest("GET", `/organizations/${orgId}/sessions/${args.session_id}`);
+    case "send_devin_message":
+      return devinRequest("POST", `/organizations/${orgId}/sessions/${args.session_id}/messages`, {
+        message: args.message,
+      });
+    default:
+      throw new Error(`Unknown tool: ${name}`);
   }
 }
 
@@ -127,7 +173,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         ok(id, { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true });
       }
     } else if (method === "notifications/initialized") {
-      // no response
+      // no response needed
     } else {
       err(id, -32601, `Method not found: ${method}`);
     }
