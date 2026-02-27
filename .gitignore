@@ -1,0 +1,18 @@
+# Sensitive credentials — never commit
+servers/.env
+.env
+*.env
+
+# Plugin artifacts
+devin.plugin
+*.plugin
+
+# Dependencies
+servers/node_modules/
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
