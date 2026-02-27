@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "devin-mcp": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/index.js"],
+      "env": {
+        "DEVIN_API_TOKEN": "${DEVIN_API_TOKEN}"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "devin-mcp-server",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server for Devin AI API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
