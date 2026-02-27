@@ -5,30 +5,27 @@ allowed-tools: Bash
 
 Launch the interactive browser-based setup UI for the Devin plugin.
 
-First, find the setup-server.js script location using Bash:
+Tell the user to run these two commands in their own Terminal (not Claude's terminal):
+
+**Step 1 — Find the setup script:**
 ```bash
 find ~ -path "*/devin/*/setup-server.js" 2>/dev/null | head -1
 ```
 
-Then tell the user to run this in their terminal (using the path found above):
-```
-node <path-to-setup-server.js>
-```
-
-For example if the plugin is cached at the default location:
-```
-node ~/.local-plugins/cache/knowledge-work-plugins/devin/0.1.0/scripts/setup-server.js
+**Step 2 — Start the setup UI (replace PATH with the result from step 1):**
+```bash
+node PATH
 ```
 
-Explain what will happen:
-- A local web server starts on their Mac at http://localhost:3747
-- Their browser opens automatically with a setup UI
-- They enter their Devin API Token (hidden input) and Organization ID
-- The UI tests the credentials against the Devin API live
-- On success, credentials are saved to ~/.config/claude-plugins/devin/config.json
+What will happen:
+- A local web server starts on port 3747
+- Their browser opens automatically to http://localhost:3747
+- They enter Devin API Token (hidden) and Organization ID
+- The UI tests the connection to the Devin API live
+- On success, credentials are saved to ~/.config/claude-plugins/devin/config.json (chmod 600)
 - The server shuts down automatically after saving
 - After setup, they should restart Claude to pick up the new credentials
 
 Where to find the credentials:
-- API Token: https://app.devin.ai/settings/api-keys
+- API Token: https://app.devin.ai/settings/api-keys  (regenerate if previously exposed)
 - Org ID: https://app.devin.ai/settings/organization
