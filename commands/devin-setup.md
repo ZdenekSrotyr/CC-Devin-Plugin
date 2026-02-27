@@ -1,13 +1,14 @@
 ---
-description: Configure Devin API credentials via interactive browser UI
+description: Configure Devin API credentials
 allowed-tools: mcp__plugin_devin_devin-mcp__setup_devin
 ---
 
-Call the `setup_devin` MCP tool immediately. Do not ask the user for anything first.
+Ask the user for their Devin credentials using two separate questions (use AskUserQuestion tool if available, otherwise ask in chat):
 
-After calling the tool, tell the user:
-- Their browser should have opened to http://localhost:3747
-- They need to enter their Devin API Token and Organization ID
-- API Token: https://app.devin.ai/settings/api-keys
-- Org ID: https://app.devin.ai/settings/organization
-- After saving in the browser, they should restart Claude
+1. Their **Organization ID** — found at https://app.devin.ai/settings/organization
+2. Their **API Token** — found at https://app.devin.ai/settings/api-keys
+
+Once you have both values, immediately call the `setup_devin` MCP tool with `token` and `org_id`. Do not show or repeat the token back to the user.
+
+If setup_devin returns `ok: true`, tell the user they are all set and can now use /devin to delegate tasks.
+If it returns an error, show the error and ask them to double-check their credentials.

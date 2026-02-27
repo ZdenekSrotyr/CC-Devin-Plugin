@@ -1,27 +1,22 @@
 #!/usr/bin/env node
 // Self-contained MCP stdio server — no npm dependencies needed
 import { createInterface } from "readline";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { homedir } from "os";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import { spawn } from "child_process";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const CONFIG_DIR = `${homedir()}/.config/claude-plugins/devin`;
+const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
 
 // Load credentials: env vars first, then config file fallback
-// Does NOT exit — returns nulls so the server can still start and offer setup tool
 function loadConfig() {
   let token = process.env.DEVIN_API_TOKEN;
   let orgId = process.env.DEVIN_ORG_ID;
 
   if (!token || !orgId) {
-    const configPath = `${homedir()}/.config/claude-plugins/devin/config.json`;
-    if (existsSync(configPath)) {
+    if (existsSync(CONFIG_PATH)) {
       try {
-        const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+        const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
         token = token || cfg.DEVIN_API_TOKEN;
         orgId = orgId || cfg.DEVIN_ORG_ID;
       } catch (e) {
@@ -35,7 +30,6 @@ function loadConfig() {
 
 let config = loadConfig();
 
-// Reload credentials from disk (called after setup completes)
 function reloadConfig() {
   config = loadConfig();
 }
@@ -55,8 +49,15 @@ async function devinRequest(method, path, body = null) {
 const TOOLS = [
   {
     name: "setup_devin",
-    description: "Launch an interactive browser UI to configure Devin API credentials. Opens http://localhost:3747 automatically.",
-    inputSchema: { type: "object", properties: {} },
+    description: "Save Devin API credentials (token and org ID) to the local config file. Call this with the token and org_id provided by the user to complete setup.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        token: { type: "string", description: "Devin API token from app.devin.ai/settings/api-keys" },
+        org_id: { type: "string", description: "Devin Organization ID from app.devin.ai/settings/organization" },
+      },
+      required: ["token", "org_id"],
+    },
   },
   {
     name: "list_devin_sessions",
@@ -103,43 +104,61 @@ const TOOLS = [
 
 // --- Tool handler ---
 async function callTool(name, args = {}) {
-  // setup_devin — works even without credentials
+
+  // setup_devin — saves credentials and verifies connection
   if (name === "setup_devin") {
-    const setupScript = join(__dirname, "..", "scripts", "setup-server.js");
-    if (!existsSync(setupScript)) {
-      return { error: "setup-server.js not found. Please reinstall the plugin." };
+    const { token, org_id } = args;
+    if (!token || !org_id) {
+      return { error: "Both token and org_id are required." };
     }
-    // Spawn detached so it outlives this process; open browser automatically
-    const child = spawn("node", [setupScript], {
-      detached: true,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    // Capture early stderr for error detection
-    let spawnErr = "";
-    child.stderr.on("data", d => { spawnErr += d.toString(); });
-    child.unref();
-    // Short delay to catch immediate crashes
-    await new Promise(r => setTimeout(r, 400));
-    if (spawnErr) {
-      return { error: `Setup server failed to start: ${spawnErr.slice(0, 300)}` };
+
+    // Verify credentials against Devin API
+    let sessionCount = 0;
+    try {
+      const res = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?limit=1`, {
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        return { error: `API verification failed (HTTP ${res.status}): ${body.slice(0, 200)}` };
+      }
+      const data = await res.json();
+      sessionCount = Array.isArray(data.sessions) ? data.sessions.length : (data.data?.length ?? 0);
+    } catch (e) {
+      return { error: `Connection failed: ${e.message}` };
     }
+
+    // Save to config file
+    try {
+      mkdirSync(CONFIG_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({
+        DEVIN_API_TOKEN: token,
+        DEVIN_ORG_ID: org_id,
+      }, null, 2), { mode: 0o600 });
+    } catch (e) {
+      return { error: `Failed to save config: ${e.message}` };
+    }
+
+    // Reload so subsequent tool calls use new credentials
+    reloadConfig();
+
     return {
-      message: "✅ Setup UI launched! Your browser should open automatically to http://localhost:3747\n\nEnter your Devin API Token and Organization ID in the form. After saving, restart Claude.",
+      ok: true,
+      message: `✅ Credentials saved and verified! Found ${sessionCount} session(s). You're ready to use Devin.`,
     };
   }
 
-  // All other tools require credentials
+  // All other tools require credentials — try reloading first
   if (!config.token || !config.orgId) {
-    // Try reloading in case user just completed setup
     reloadConfig();
   }
   if (!config.token || !config.orgId) {
     return {
-      error: "Devin credentials not configured. Call the setup_devin tool to open the browser setup UI.",
+      error: "Devin credentials not configured. Run /devin-setup to configure.",
     };
   }
 
-  const { token, orgId } = config;
+  const { orgId } = config;
   switch (name) {
     case "list_devin_sessions":
       return devinRequest("GET", `/organizations/${orgId}/sessions?limit=${args.limit || 10}`);
