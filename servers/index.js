@@ -1,31 +1,40 @@
 #!/usr/bin/env node
 // Self-contained MCP stdio server — no npm dependencies needed
 import { createInterface } from "readline";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { homedir } from "os";
+import { execFileSync } from "child_process";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
-const CONFIG_DIR = `${homedir()}/.config/claude-plugins/devin`;
-const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
 
-// Load credentials: env vars first, then config file fallback
-function loadConfig() {
-  let token = process.env.DEVIN_API_TOKEN;
-  let orgId = process.env.DEVIN_ORG_ID;
+// macOS Keychain entries
+const KC_ACCOUNT = "devin";
+const KC_TOKEN   = "claude-devin-token";
+const KC_ORG     = "claude-devin-orgid";
 
-  if (!token || !orgId) {
-    if (existsSync(CONFIG_PATH)) {
-      try {
-        const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-        token = token || cfg.DEVIN_API_TOKEN;
-        orgId = orgId || cfg.DEVIN_ORG_ID;
-      } catch (e) {
-        process.stderr.write(`Warning: Could not read config file: ${e.message}\n`);
-      }
-    }
+function keychainGet(service) {
+  try {
+    return execFileSync(
+      "security",
+      ["find-generic-password", "-a", KC_ACCOUNT, "-s", service, "-w"],
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim() || null;
+  } catch {
+    return null;
   }
+}
 
-  return { token: token || null, orgId: orgId || null };
+function keychainSet(service, value) {
+  execFileSync(
+    "security",
+    ["add-generic-password", "-U", "-a", KC_ACCOUNT, "-s", service, "-w", value],
+    { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+  );
+}
+
+function loadConfig() {
+  return {
+    token: keychainGet(KC_TOKEN),
+    orgId: keychainGet(KC_ORG),
+  };
 }
 
 let config = loadConfig();
@@ -49,7 +58,7 @@ async function devinRequest(method, path, body = null) {
 const TOOLS = [
   {
     name: "setup_devin",
-    description: "Save Devin API credentials (token and org ID) to the local config file. Call this with the token and org_id provided by the user to complete setup.",
+    description: "Save Devin API credentials (token and org ID) securely to macOS Keychain. Call this with the token and org_id provided by the user to complete setup.",
     inputSchema: {
       type: "object",
       properties: {
@@ -105,7 +114,7 @@ const TOOLS = [
 // --- Tool handler ---
 async function callTool(name, args = {}) {
 
-  // setup_devin — saves credentials and verifies connection
+  // setup_devin — saves credentials to Keychain and verifies connection
   if (name === "setup_devin") {
     const { token, org_id } = args;
     if (!token || !org_id) {
@@ -128,15 +137,12 @@ async function callTool(name, args = {}) {
       return { error: `Connection failed: ${e.message}` };
     }
 
-    // Save to config file
+    // Save to macOS Keychain
     try {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-      writeFileSync(CONFIG_PATH, JSON.stringify({
-        DEVIN_API_TOKEN: token,
-        DEVIN_ORG_ID: org_id,
-      }, null, 2), { mode: 0o600 });
+      keychainSet(KC_TOKEN, token);
+      keychainSet(KC_ORG, org_id);
     } catch (e) {
-      return { error: `Failed to save config: ${e.message}` };
+      return { error: `Failed to save to Keychain: ${e.message}` };
     }
 
     // Reload so subsequent tool calls use new credentials
@@ -144,7 +150,7 @@ async function callTool(name, args = {}) {
 
     return {
       ok: true,
-      message: `✅ Credentials saved and verified! Found ${sessionCount} session(s). You're ready to use Devin.`,
+      message: `Credentials saved to macOS Keychain and verified. Found ${sessionCount} session(s). You're ready to use Devin.`,
     };
   }
 

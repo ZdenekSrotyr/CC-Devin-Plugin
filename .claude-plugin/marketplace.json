@@ -1,0 +1,13 @@
+{
+  "name": "devin",
+  "owner": {
+    "name": "Zdeněk Šrotýř"
+  },
+  "plugins": [
+    {
+      "name": "devin",
+      "description": "Delegate coding tasks to Devin AI as a sub-agent",
+      "source": "./."
+    }
+  ]
+}
