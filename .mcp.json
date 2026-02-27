@@ -1,6 +1,7 @@
 {
   "mcpServers": {
     "devin-mcp": {
+      "type": "stdio",
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/servers/index.js"]
     }

@@ -3,17 +3,20 @@ description: Configure Devin API credentials
 allowed-tools: mcp__plugin_devin_devin-mcp__setup_devin
 ---
 
-**Before doing anything else**, check whether the `setup_devin` tool is available in your current session.
+**CRITICAL: Before doing anything else**, check whether `mcp__plugin_devin_devin-mcp__setup_devin` is in your list of available tools.
 
-If `mcp__plugin_devin_devin-mcp__setup_devin` is NOT in your available tools, stop immediately and tell the user:
+**If it is NOT available:**
+- Stop immediately. Do not ask for credentials.
+- Do not attempt to store credentials any other way (no `security` commands, no files, no env vars).
+- Tell the user exactly this:
 
-> "The Devin MCP server is not connected to this session yet. This usually means the plugin was just installed and Claude hasn't been restarted yet. Please restart Claude and run /devin-setup again."
+> "The Devin MCP server is not connected to this session yet. Please restart Claude and start a new conversation, then run /devin-setup again."
 
-Do not ask for credentials if the tool is unavailable — there is nowhere to store them.
+That is all. Do not proceed further.
 
 ---
 
-If the tool IS available, proceed:
+**If it IS available**, proceed:
 
 Tell the user that their credentials will be stored securely — in macOS Keychain on macOS, or in a user-only config file (`~/.config/claude-plugins/devin/config.json`) on Linux.
 
