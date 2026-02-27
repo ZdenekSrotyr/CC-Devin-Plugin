@@ -112,11 +112,19 @@ async function callTool(name, args = {}) {
     // Spawn detached so it outlives this process; open browser automatically
     const child = spawn("node", [setupScript], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
+    // Capture early stderr for error detection
+    let spawnErr = "";
+    child.stderr.on("data", d => { spawnErr += d.toString(); });
     child.unref();
+    // Short delay to catch immediate crashes
+    await new Promise(r => setTimeout(r, 400));
+    if (spawnErr) {
+      return { error: `Setup server failed to start: ${spawnErr.slice(0, 300)}` };
+    }
     return {
-      message: "✅ Setup UI launched! Your browser should open automatically to http://localhost:3747\n\nEnter your Devin API Token and Organization ID in the form. After saving, run /devin-setup again or retry your command.",
+      message: "✅ Setup UI launched! Your browser should open automatically to http://localhost:3747\n\nEnter your Devin API Token and Organization ID in the form. After saving, restart Claude.",
     };
   }
 
