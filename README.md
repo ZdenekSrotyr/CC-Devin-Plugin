@@ -6,59 +6,60 @@ Delegate coding tasks to [Devin AI](https://app.devin.ai) directly from Claude. 
 
 | Component | Description |
 |-----------|-------------|
-| `/devin` command | Quickly assign a task to Devin |
+| `/devin` command | Assign a task to Devin |
+| `/devin-setup` command | Save your API credentials |
 | `devin-orchestration` skill | Guides Claude on when and how to use Devin |
 | `devin-mcp` server | Wraps the Devin API with MCP tools |
 
+## Installation
+
+```bash
+/plugin marketplace add ZdenekSrotyr/CC-Devin-Plugin
+/plugin install devin@devin
+```
+
+Then restart Claude.
+
 ## Setup
 
-### 1. Install Node.js dependencies
+Run `/devin-setup` in a new conversation. Claude will ask for your credentials and save them securely — no environment variables or config files needed.
 
-```bash
-cd <plugin-root>/servers
-npm install
-```
+You'll need:
+- **API Token** — [app.devin.ai/settings/api-keys](https://app.devin.ai/settings/api-keys)
+- **Organization ID** — [app.devin.ai/settings/organization](https://app.devin.ai/settings/organization)
 
-### 2. Set your Devin API token
-
-Add this to your environment (e.g. `~/.zshrc` or `~/.bashrc`):
-
-```bash
-export DEVIN_API_TOKEN="your_token_here"
-```
-
-You can find your token at: https://app.devin.ai → Settings → API
-
-### 3. Reload Claude
-
-Restart Claude after installing the plugin and setting the environment variable.
+Credentials are stored in **macOS Keychain** (macOS) or `~/.config/claude-plugins/devin/config.json` with mode 0600 (Linux).
 
 ## Usage
-
-### Via command
 
 ```
 /devin Fix the login bug in github.com/myorg/myapp — login fails for uppercase emails
 ```
 
-### Via natural language
-
+Or natural language:
 - "Deleguj tohle Devinovi"
 - "Ať to Devin opraví"
-- "Pošli tento task Devinovi"
 - "Zkontroluj, co Devin dělá"
 
 ## Available MCP tools
 
 | Tool | Description |
 |------|-------------|
+| `setup_devin` | Save API credentials |
 | `create_devin_session` | Start a new Devin task |
 | `get_devin_session` | Check status of a session |
 | `send_devin_message` | Send follow-up message to Devin |
 | `list_devin_sessions` | List recent sessions |
 
-## Required environment variables
+## Removing credentials
 
-| Variable | Description |
-|----------|-------------|
-| `DEVIN_API_TOKEN` | Your Devin API Bearer token |
+**macOS:**
+```bash
+security delete-generic-password -a devin -s claude-devin-token
+security delete-generic-password -a devin -s claude-devin-orgid
+```
+
+**Linux:**
+```bash
+rm ~/.config/claude-plugins/devin/config.json
+```
