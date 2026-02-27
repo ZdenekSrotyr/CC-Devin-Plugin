@@ -232,13 +232,16 @@ const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 const ok  = (id, result) => send({ jsonrpc: "2.0", id, result });
 const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
 
+const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
+process.stderr.write(`[devin-mcp] started (${IS_MACOS ? "macOS" : "Linux"}, ${credStatus})\n`);
+
 createInterface({ input: process.stdin }).on("line", async (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch { return; }
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.1.0" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.2.1" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
