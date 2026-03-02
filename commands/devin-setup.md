@@ -20,13 +20,16 @@ That is all. Do not proceed further.
 
 Tell the user that their credentials will be stored securely — in macOS Keychain on macOS, or in a user-only config file (`~/.config/claude-plugins/devin/config.json`) on Linux.
 
-Ask for their Devin credentials using two separate questions (use AskUserQuestion tool if available, otherwise ask in chat):
+Ask for their Devin credentials in order:
 
 1. Their **Organization ID** — found at https://app.devin.ai/settings/organization
 2. Their **API Token** — found at https://app.devin.ai/settings/api-keys
+3. Their **User ID** (optional, but recommended for personal session filtering) — this is the `user_id` field visible in session details, in the format `email|xxx` or `google-oauth2|xxx`. If they don't know it, they can skip it and add it later.
 
-Once you have both values, immediately call the `setup_devin` MCP tool with `token` and `org_id`. Do not show, log, or repeat the token back to the user at any point.
+Once you have at least the token and org_id, call the `setup_devin` MCP tool with `token`, `org_id`, and optionally `user_id`. Do not show, log, or repeat the token back to the user at any point.
 
-If setup_devin returns `ok: true`, tell the user they are all set and can now use /devin to delegate tasks.
+If setup_devin returns `ok: true`, tell the user they are all set and can now use `/devin` to delegate tasks.
+
+If `user_id` was not provided, suggest they run `list_devin_sessions` to see their sessions and identify their `user_id`, then re-run `/devin-setup` with it to enable personal filtering.
 
 If it returns an error, show the error message and ask them to double-check their credentials.

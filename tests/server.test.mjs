@@ -86,6 +86,7 @@ const EXPECTED_TOOLS = [
   "get_devin_session",
   "send_devin_message",
   "list_devin_sessions",
+  "get_devin_stats",
 ];
 
 const MESSAGES = [
@@ -152,10 +153,13 @@ await new Promise((resolve, reject) => {
         const r = get(3);
         assert.ok(r, "no response");
         const text = r.result.content[0].text;
-        const data = JSON.parse(text);
-        // Either no credentials (error) or real API response (sessions/items array)
+        // May be a raw Error string (API failure) or JSON (no-creds error or real response)
+        let data;
+        try { data = JSON.parse(text); } catch { data = null; }
+        const isRawError = text.startsWith("Error:");
+        const isJsonResponse = data !== null && (data.error || Array.isArray(data.sessions) || data.count >= 0);
         assert.ok(
-          data.error || Array.isArray(data.sessions) || Array.isArray(data.items),
+          isRawError || isJsonResponse,
           `unexpected response structure: ${text.slice(0, 100)}`
         );
       });

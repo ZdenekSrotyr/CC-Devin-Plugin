@@ -12,6 +12,7 @@ const IS_MACOS = process.platform === "darwin";
 const KC_ACCOUNT = "devin";
 const KC_TOKEN   = "claude-devin-token";
 const KC_ORG     = "claude-devin-orgid";
+const KC_USER    = "claude-devin-userid";
 
 // Linux fallback: config file
 const CONFIG_DIR  = `${homedir()}/.config/claude-plugins/devin`;
@@ -48,32 +49,39 @@ function configFileGet(key) {
   }
 }
 
-function configFileSet(token, orgId) {
+function configFileSet(token, orgId, userId) {
   mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(
-    CONFIG_PATH,
-    JSON.stringify({ DEVIN_API_TOKEN: token, DEVIN_ORG_ID: orgId }, null, 2),
-    { mode: 0o600 }
-  );
+  const existing = (() => {
+    try { return JSON.parse(readFileSync(CONFIG_PATH, "utf8")); } catch { return {}; }
+  })();
+  const data = { ...existing, DEVIN_API_TOKEN: token, DEVIN_ORG_ID: orgId };
+  if (userId) data.DEVIN_USER_ID = userId;
+  writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 // --- Unified load/save ---
 function loadConfig() {
   if (IS_MACOS) {
-    return { token: keychainGet(KC_TOKEN), orgId: keychainGet(KC_ORG) };
+    return {
+      token: keychainGet(KC_TOKEN),
+      orgId: keychainGet(KC_ORG),
+      userId: keychainGet(KC_USER),
+    };
   }
   return {
     token: configFileGet("DEVIN_API_TOKEN"),
     orgId: configFileGet("DEVIN_ORG_ID"),
+    userId: configFileGet("DEVIN_USER_ID"),
   };
 }
 
-function saveConfig(token, orgId) {
+function saveConfig(token, orgId, userId) {
   if (IS_MACOS) {
     keychainSet(KC_TOKEN, token);
     keychainSet(KC_ORG, orgId);
+    if (userId) keychainSet(KC_USER, userId);
   } else {
-    configFileSet(token, orgId);
+    configFileSet(token, orgId, userId);
   }
 }
 
@@ -104,16 +112,27 @@ const TOOLS = [
       properties: {
         token: { type: "string", description: "Devin API token from app.devin.ai/settings/api-keys" },
         org_id: { type: "string", description: "Devin Organization ID from app.devin.ai/settings/organization" },
+        user_id: { type: "string", description: "Optional: your Devin user_id (e.g. email|xxx) to enable personal session filtering. Can be found in session data." },
       },
       required: ["token", "org_id"],
     },
   },
   {
     name: "list_devin_sessions",
-    description: "List recent Devin sessions with their statuses.",
+    description: "List Devin sessions. By default shows only YOUR running sessions (mine_only=true, status=[\"running\"]). Set status=[\"running\",\"suspended\"] or status=\"all\" for more. Always uses a limit to avoid flooding context.",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "number", description: "Max sessions to return (default 10)" } },
+      properties: {
+        limit: { type: "number", description: "Max sessions to return (default 10, max 50)" },
+        mine_only: { type: "boolean", description: "Filter to your own sessions only (default true). Requires user_id configured in setup. Pass false to see all users." },
+        status: {
+          description: "Status filter. Default [\"running\"]. Pass [\"running\",\"suspended\"] or \"all\" to widen.",
+          oneOf: [
+            { type: "string", enum: ["all", "running", "suspended", "stopped"] },
+            { type: "array", items: { type: "string" } },
+          ],
+        },
+      },
     },
   },
   {
@@ -149,6 +168,17 @@ const TOOLS = [
       required: ["session_id", "message"],
     },
   },
+  {
+    name: "get_devin_stats",
+    description: "Get aggregated ACU consumption statistics across Devin sessions. Optionally filter to only your own sessions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mine_only: { type: "boolean", description: "If true, count only sessions belonging to the configured user_id" },
+        limit: { type: "number", description: "Number of recent sessions to analyze (default 50)" },
+      },
+    },
+  },
 ];
 
 // --- Tool handler ---
@@ -156,7 +186,7 @@ async function callTool(name, args = {}) {
 
   // setup_devin — saves credentials to Keychain and verifies connection
   if (name === "setup_devin") {
-    const { token, org_id } = args;
+    const { token, org_id, user_id } = args;
     if (!token || !org_id) {
       return { error: "Both token and org_id are required." };
     }
@@ -179,7 +209,7 @@ async function callTool(name, args = {}) {
 
     // Save credentials (Keychain on macOS, config file on Linux)
     try {
-      saveConfig(token, org_id);
+      saveConfig(token, org_id, user_id || null);
     } catch (e) {
       return { error: `Failed to save credentials: ${e.message}` };
     }
@@ -191,9 +221,13 @@ async function callTool(name, args = {}) {
       ? "macOS Keychain"
       : `config file (${CONFIG_PATH}, mode 0600)`;
 
+    const userNote = user_id
+      ? ` User ID saved — personal session filtering enabled.`
+      : ` No user_id provided — run setup again with user_id to enable personal filtering.`;
+
     return {
       ok: true,
-      message: `Credentials saved to ${storage} and verified. Found ${sessionCount} session(s). You're ready to use Devin.`,
+      message: `Credentials saved to ${storage} and verified. Found ${sessionCount} session(s).${userNote}`,
     };
   }
 
@@ -208,20 +242,106 @@ async function callTool(name, args = {}) {
   }
 
   const { orgId } = config;
+
   switch (name) {
-    case "list_devin_sessions":
-      return devinRequest("GET", `/organizations/${orgId}/sessions?limit=${args.limit || 10}`);
+    case "list_devin_sessions": {
+      // Defaults: mine_only=true, status=["running"], limit=10
+      const mineOnly = args.mine_only !== false;
+      const limit = Math.min(args.limit || 10, 50);
+      const statusArg = args.status ?? ["running"];
+      const statusFilter = statusArg === "all" ? null
+                         : Array.isArray(statusArg) ? statusArg : [statusArg];
+
+      // Require user_id when mine_only (default)
+      if (mineOnly && !config.userId) {
+        return { error: "user_id not configured. Run /devin-setup and provide your user_id, or pass mine_only=false to list all users' sessions." };
+      }
+
+      // Fetch more from API to account for client-side status filtering
+      const fetchLimit = statusFilter ? Math.min(limit * 5, 200) : limit;
+      let url = `/organizations/${orgId}/sessions?first=${fetchLimit}`;
+      if (mineOnly) url += `&user_ids=${encodeURIComponent(config.userId)}`;
+
+      const data = await devinRequest("GET", url);
+      let sessions = Array.isArray(data.items) ? data.items
+                   : Array.isArray(data.sessions) ? data.sessions
+                   : Array.isArray(data.data) ? data.data : [];
+
+      // Client-side status filter (API doesn't support it server-side)
+      if (statusFilter) {
+        sessions = sessions.filter((s) => statusFilter.includes(s.status));
+      }
+      sessions = sessions.slice(0, limit);
+
+      const result = sessions.map((s) => ({
+        session_id: s.session_id,
+        title: s.title || "(no title)",
+        status: s.status,
+        status_detail: s.status_detail,
+        acus_consumed: s.acus_consumed ?? null,
+        created_at: s.created_at,
+        url: s.url,
+      }));
+
+      const totalAcus = result.reduce((sum, s) => sum + (s.acus_consumed || 0), 0);
+      return { sessions: result, total_acus_consumed: totalAcus, count: result.length };
+    }
+
     case "create_devin_session":
       return devinRequest("POST", `/organizations/${orgId}/sessions`, {
         prompt: args.prompt,
         ...(args.idempotent_client_id && { idempotent_client_id: args.idempotent_client_id }),
       });
-    case "get_devin_session":
-      return devinRequest("GET", `/organizations/${orgId}/sessions/${args.session_id}`);
+
+    case "get_devin_session": {
+      const data = await devinRequest("GET", `/organizations/${orgId}/sessions?session_ids=${args.session_id}&first=1`);
+      const session = (data.items || [])[0];
+      if (!session) return { error: `Session ${args.session_id} not found.` };
+      return session;
+    }
+
     case "send_devin_message":
       return devinRequest("POST", `/organizations/${orgId}/sessions/${args.session_id}/messages`, {
         message: args.message,
       });
+
+    case "get_devin_stats": {
+      const mineOnly = args.mine_only === true;
+      const limit = args.limit || 50;
+
+      let url = `/organizations/${orgId}/sessions?first=${limit}`;
+      if (mineOnly) {
+        if (!config.userId) {
+          return { error: "mine_only=true requires user_id to be configured. Run /devin-setup and provide your user_id." };
+        }
+        url += `&user_ids=${encodeURIComponent(config.userId)}`;
+      }
+
+      const data = await devinRequest("GET", url);
+      const sessions = Array.isArray(data.items) ? data.items
+                     : Array.isArray(data.sessions) ? data.sessions
+                     : Array.isArray(data.data) ? data.data : [];
+
+      const totalAcus = sessions.reduce((sum, s) => sum + (s.acus_consumed || 0), 0);
+      const byStatus = sessions.reduce((acc, s) => {
+        acc[s.status] = (acc[s.status] || 0) + 1;
+        return acc;
+      }, {});
+      const acusByUser = {};
+      for (const s of sessions) {
+        const uid = s.user_id || "unknown";
+        acusByUser[uid] = (acusByUser[uid] || 0) + (s.acus_consumed || 0);
+      }
+
+      return {
+        sessions_analyzed: sessions.length,
+        total_acus_consumed: totalAcus,
+        sessions_by_status: byStatus,
+        acus_by_user: mineOnly ? undefined : acusByUser,
+        filter: mineOnly ? `user_id=${config.userId}` : "all users",
+      };
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -233,7 +353,8 @@ const ok  = (id, result) => send({ jsonrpc: "2.0", id, result });
 const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
 
 const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
-process.stderr.write(`[devin-mcp] started (${IS_MACOS ? "macOS" : "Linux"}, ${credStatus})\n`);
+const userStatus = config.userId ? `, user=${config.userId}` : "";
+process.stderr.write(`[devin-mcp] started (${IS_MACOS ? "macOS" : "Linux"}, ${credStatus}${userStatus})\n`);
 
 createInterface({ input: process.stdin }).on("line", async (line) => {
   let msg;
@@ -241,7 +362,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.2.5" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.0" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
