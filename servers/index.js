@@ -32,14 +32,46 @@ function configSet(token, orgId, userId) {
   writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
+function readConfigFile(path) {
+  try {
+    const cfg = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      token: cfg.DEVIN_API_TOKEN || null,
+      orgId: cfg.DEVIN_ORG_ID   || null,
+      userId: cfg.DEVIN_USER_ID  || null,
+    };
+  } catch { return null; }
+}
+
 function loadConfig() {
-  // Priority: environment variables > config file
-  // Env vars work in all environments (shell profile, Cowork settings, CI)
-  return {
-    token: process.env.DEVIN_API_TOKEN || configGet("DEVIN_API_TOKEN"),
-    orgId: process.env.DEVIN_ORG_ID   || configGet("DEVIN_ORG_ID"),
-    userId: process.env.DEVIN_USER_ID  || configGet("DEVIN_USER_ID"),
-  };
+  // 1. Environment variables (highest priority)
+  if (process.env.DEVIN_API_TOKEN && process.env.DEVIN_ORG_ID) {
+    return {
+      token: process.env.DEVIN_API_TOKEN,
+      orgId: process.env.DEVIN_ORG_ID,
+      userId: process.env.DEVIN_USER_ID || null,
+    };
+  }
+
+  // 2. Config file at current home (works in CLI and normal environments)
+  const local = readConfigFile(CONFIG_PATH);
+  if (local?.token && local?.orgId) return local;
+
+  // 3. If in sandbox (Cowork), try real macOS/Linux home via $USER
+  //    Setup done via CLI is stored there and may be readable from sandbox
+  const user = process.env.USER || process.env.LOGNAME;
+  if (homedir().startsWith("/sessions/") && user) {
+    const candidates = [
+      `/Users/${user}/.config/claude-plugins/devin/config.json`,   // macOS
+      `/home/${user}/.config/claude-plugins/devin/config.json`,    // Linux
+    ];
+    for (const p of candidates) {
+      const real = readConfigFile(p);
+      if (real?.token && real?.orgId) return real;
+    }
+  }
+
+  return { token: null, orgId: null, userId: null };
 }
 
 function saveConfig(token, orgId, userId) {
@@ -436,7 +468,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.7" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.8" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
