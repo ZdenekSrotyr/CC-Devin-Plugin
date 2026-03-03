@@ -53,23 +53,9 @@ function loadConfig() {
     };
   }
 
-  // 2. Config file at current home (works in CLI and normal environments)
+  // 2. Config file
   const local = readConfigFile(CONFIG_PATH);
-  if (local?.token && local?.orgId) return local;
-
-  // 3. If in sandbox (Cowork), try real macOS/Linux home via $USER
-  //    Setup done via CLI is stored there and may be readable from sandbox
-  const user = process.env.USER || process.env.LOGNAME;
-  if (homedir().startsWith("/sessions/") && user) {
-    const candidates = [
-      `/Users/${user}/.config/claude-plugins/devin/config.json`,   // macOS
-      `/home/${user}/.config/claude-plugins/devin/config.json`,    // Linux
-    ];
-    for (const p of candidates) {
-      const real = readConfigFile(p);
-      if (real?.token && real?.orgId) return real;
-    }
-  }
+  if (local?.token) return local;
 
   return { token: null, orgId: null, userId: null };
 }
@@ -468,7 +454,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.8" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.9" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
