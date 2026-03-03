@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Self-contained MCP stdio server — no npm dependencies needed
 import { createInterface } from "readline";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { execFileSync } from "child_process";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { homedir } from "os";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
@@ -62,8 +63,13 @@ async function devinRequest(method, path, body = null) {
 // --- Tool definitions ---
 const TOOLS = [
   {
+    name: "open_config_file",
+    description: "Create a config file template and open it in the system editor so the user can fill in their Devin credentials without pasting them into the chat. After the user saves the file, verify with list_devin_sessions.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "setup_devin",
-    description: "Save Devin API credentials (token and org ID) securely to macOS Keychain. Call this with the token and org_id provided by the user to complete setup.",
+    description: "Save Devin API credentials to ~/.config/claude-plugins/devin/config.json. Prefer open_config_file for security — use this only when the user explicitly provides credentials in chat.",
     inputSchema: {
       type: "object",
       properties: {
@@ -142,7 +148,36 @@ const TOOLS = [
 // --- Tool handler ---
 async function callTool(name, args = {}) {
 
-  // setup_devin — saves credentials to Keychain and verifies connection
+  // open_config_file — creates template and opens in system editor
+  if (name === "open_config_file") {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    const template = {
+      DEVIN_API_TOKEN: "paste-your-token-here",
+      DEVIN_ORG_ID: "paste-your-org-id-here",
+      DEVIN_USER_ID: "optional-your-user-id-here",
+    };
+    if (!existsSync(CONFIG_PATH)) {
+      writeFileSync(CONFIG_PATH, JSON.stringify(template, null, 2), { mode: 0o600 });
+    }
+    let opened = false;
+    try {
+      const opener = process.platform === "darwin" ? "open" : "xdg-open";
+      execFileSync(opener, [CONFIG_PATH], { stdio: "ignore" });
+      opened = true;
+    } catch {
+      opened = false;
+    }
+    return {
+      ok: true,
+      config_path: CONFIG_PATH,
+      opened_in_editor: opened,
+      message: opened
+        ? `Config file opened in your editor. Fill in your credentials and save, then I'll verify the connection.`
+        : `Could not open editor automatically. Please open this file manually and fill in your credentials:\n${CONFIG_PATH}`,
+    };
+  }
+
+  // setup_devin — saves credentials to config file
   if (name === "setup_devin") {
     const { token, org_id, user_id } = args;
     if (!token || !org_id) {
@@ -327,7 +362,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.3" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.4" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {

@@ -45,7 +45,8 @@ Or natural language:
 
 | Tool | Description |
 |------|-------------|
-| `setup_devin` | Save API credentials |
+| `open_config_file` | Open config file in editor (secure setup — no credentials in chat) |
+| `setup_devin` | Save API credentials programmatically |
 | `create_devin_session` | Start a new Devin task |
 | `get_devin_session` | Check status of a session |
 | `send_devin_message` | Send follow-up message to Devin |
