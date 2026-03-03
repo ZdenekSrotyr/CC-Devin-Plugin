@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Self-contained MCP stdio server — no npm dependencies needed
 import { createInterface } from "readline";
+import { createServer } from "http";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { homedir } from "os";
@@ -150,43 +151,103 @@ const TOOLS = [
 // --- Tool handler ---
 async function callTool(name, args = {}) {
 
-  // open_config_file — creates template and opens in system editor (or detects sandbox)
+  // open_config_file — starts a local web form for secure credential entry
   if (name === "open_config_file") {
-    const isSandbox = homedir().startsWith("/sessions/");
-
-    if (isSandbox) {
-      return {
-        ok: false,
-        is_sandbox: true,
-        message: "Running in a sandboxed environment (Cowork). The config path is ephemeral and not accessible from your filesystem. Please provide your credentials in chat — they will be saved for this session via setup_devin.",
+    // Find a free port
+    const port = await new Promise((resolve, reject) => {
+      let p = 19473;
+      const tryPort = () => {
+        const s = createServer();
+        s.once("error", () => { p++; if (p > 19573) reject(new Error("No free port")); else tryPort(); });
+        s.once("listening", () => { s.close(() => resolve(p)); });
+        s.listen(p, "127.0.0.1");
       };
-    }
+      tryPort();
+    });
 
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    const template = {
-      DEVIN_API_TOKEN: "paste-your-token-here",
-      DEVIN_ORG_ID: "paste-your-org-id-here",
-      DEVIN_USER_ID: "optional-your-user-id-here",
-    };
-    if (!existsSync(CONFIG_PATH)) {
-      writeFileSync(CONFIG_PATH, JSON.stringify(template, null, 2), { mode: 0o600 });
-    }
+    const FORM_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Plugin Setup</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 1rem; color: #111; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
+  p.sub { color: #666; font-size: 0.9rem; margin-top: 0; }
+  label { display: block; margin-top: 1.2rem; font-weight: 600; font-size: 0.9rem; }
+  input { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; margin-top: 0.3rem;
+          border: 1px solid #ccc; border-radius: 6px; font-size: 0.95rem; }
+  a.hint { font-size: 0.8rem; color: #0066cc; text-decoration: none; }
+  button { margin-top: 1.8rem; width: 100%; padding: 0.7rem; background: #0066cc;
+           color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; }
+  button:hover { background: #0052a3; }
+  .note { margin-top: 1rem; font-size: 0.8rem; color: #888; }
+</style></head><body>
+<h1>Devin Plugin — Setup</h1>
+<p class="sub">Credentials are saved directly to the config file. Nothing is sent to chat.</p>
+<form method="POST">
+  <label>API Token <a class="hint" href="https://app.devin.ai/settings/api-keys" target="_blank">↗ where to find it</a></label>
+  <input type="password" name="token" required placeholder="ey…" autocomplete="off">
+  <label>Organization ID <a class="hint" href="https://app.devin.ai/settings/organization" target="_blank">↗ where to find it</a></label>
+  <input type="text" name="org_id" required placeholder="org_…" autocomplete="off">
+  <label>User ID <span style="font-weight:400;color:#888">(optional — enables personal session filtering)</span></label>
+  <input type="text" name="user_id" placeholder="email|xxx or google-oauth2|xxx" autocomplete="off">
+  <button type="submit">Save credentials</button>
+</form>
+<p class="note">This page is served locally by the Devin MCP server and closes automatically after saving.</p>
+</body></html>`;
+
+    const SUCCESS_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Setup — Done</title>
+<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 1rem;text-align:center;}
+h1{color:#1a7f37;}p{color:#555;}</style></head><body>
+<h1>✓ Credentials saved</h1>
+<p>You can close this tab and return to Claude.</p>
+</body></html>`;
+
+    const srv = createServer((req, res) => {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(FORM_HTML);
+      } else if (req.method === "POST") {
+        let body = "";
+        req.on("data", chunk => { body += chunk; });
+        req.on("end", () => {
+          const p = new URLSearchParams(body);
+          const token = p.get("token")?.trim();
+          const org_id = p.get("org_id")?.trim();
+          const user_id = p.get("user_id")?.trim() || null;
+          if (token && org_id) {
+            mkdirSync(CONFIG_DIR, { recursive: true });
+            configSet(token, org_id, user_id);
+            reloadConfig();
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end(SUCCESS_HTML);
+            setTimeout(() => srv.close(), 1500);
+          } else {
+            res.writeHead(400, { "Content-Type": "text/plain" });
+            res.end("Token and Org ID are required.");
+          }
+        });
+      } else {
+        res.writeHead(405); res.end();
+      }
+    });
+
+    srv.listen(port, "127.0.0.1");
+
+    // Try to open the browser automatically
     let opened = false;
     try {
       const opener = process.platform === "darwin" ? "open" : "xdg-open";
-      execFileSync(opener, [CONFIG_PATH], { stdio: "ignore" });
+      execFileSync(opener, [`http://127.0.0.1:${port}`], { stdio: "ignore" });
       opened = true;
-    } catch {
-      opened = false;
-    }
+    } catch { opened = false; }
+
     return {
       ok: true,
-      is_sandbox: false,
-      config_path: CONFIG_PATH,
-      opened_in_editor: opened,
+      setup_url: `http://127.0.0.1:${port}`,
+      browser_opened: opened,
       message: opened
-        ? `Config file opened in your editor. Fill in your credentials and save, then I'll verify the connection.`
-        : `Could not open editor automatically. Please open this file manually:\n${CONFIG_PATH}`,
+        ? `Setup page opened in your browser at http://127.0.0.1:${port} — fill in your credentials and save.`
+        : `Open this URL in your browser to enter credentials securely:\nhttp://127.0.0.1:${port}`,
     };
   }
 
@@ -375,7 +436,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.6" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.7" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
