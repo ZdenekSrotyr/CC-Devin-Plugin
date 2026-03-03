@@ -6,10 +6,34 @@ allowed-tools: mcp__plugin_devin_devin-mcp__open_config_file, mcp__plugin_devin_
 **CRITICAL: Before doing anything else**, check whether `mcp__plugin_devin_devin-mcp__open_config_file` is in your list of available tools.
 
 **If it is NOT available:**
-- Stop immediately. Do not ask for credentials.
-- Tell the user exactly this:
+- Do not ask for credentials.
+- Tell the user the MCP server is not connected, and show them both manual setup options:
 
-> "The Devin MCP server is not connected to this session yet. Please restart Claude and start a new conversation, then run /devin-setup again."
+> "The Devin MCP server is not connected to this session. You can set up credentials manually using one of these options, then restart Claude and run /devin-setup again to verify.
+>
+> **Option A — macOS Keychain (recommended):**
+> ```bash
+> security add-generic-password -U -a devin -s claude-devin-token -w "YOUR_API_TOKEN"
+> security add-generic-password -U -a devin -s claude-devin-orgid  -w "YOUR_ORG_ID"
+> security add-generic-password -U -a devin -s claude-devin-userid -w "YOUR_USER_ID"
+> ```
+>
+> **Option B — Config file:**
+> ```bash
+> mkdir -p ~/.config/claude-plugins/devin
+> cat > ~/.config/claude-plugins/devin/config.json <<EOF
+> {
+>   "DEVIN_API_TOKEN": "YOUR_API_TOKEN",
+>   "DEVIN_ORG_ID": "YOUR_ORG_ID",
+>   "DEVIN_USER_ID": "YOUR_USER_ID"
+> }
+> EOF
+> chmod 600 ~/.config/claude-plugins/devin/config.json
+> ```
+>
+> Get your credentials at:
+> - API Token → app.devin.ai/settings/api-keys
+> - Org ID → app.devin.ai/settings/organization"
 
 That is all. Do not proceed further.
 
