@@ -119,7 +119,7 @@ const TOOLS = [
   },
   {
     name: "list_devin_sessions",
-    description: "List Devin sessions. By default shows only YOUR running sessions (mine_only=true, status=[\"running\"]). Set status=[\"running\",\"suspended\"] or status=\"all\" for more. Always uses a limit to avoid flooding context.",
+    description: "List Devin sessions. By default shows only YOUR running non-archived sessions (mine_only=true, status=[\"running\"], include_archived=false). Set status=[\"running\",\"suspended\"] or status=\"all\" for more. Always uses a limit to avoid flooding context.",
     inputSchema: {
       type: "object",
       properties: {
@@ -132,6 +132,7 @@ const TOOLS = [
             { type: "array", items: { type: "string" } },
           ],
         },
+        include_archived: { type: "boolean", description: "Include archived sessions (default false). Set to true to also show archived sessions." },
       },
     },
   },
@@ -194,7 +195,7 @@ async function callTool(name, args = {}) {
     // Verify credentials against Devin API
     let sessionCount = 0;
     try {
-      const res = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?limit=1`, {
+      const res = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=1`, {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
       if (!res.ok) {
@@ -245,20 +246,21 @@ async function callTool(name, args = {}) {
 
   switch (name) {
     case "list_devin_sessions": {
-      // Defaults: mine_only=true, status=["running"], limit=10
+      // Defaults: mine_only=true, status=["running"], limit=10, include_archived=false
       const mineOnly = args.mine_only !== false;
       const limit = Math.min(args.limit || 10, 50);
       const statusArg = args.status ?? ["running"];
       const statusFilter = statusArg === "all" ? null
                          : Array.isArray(statusArg) ? statusArg : [statusArg];
+      const includeArchived = args.include_archived === true;
 
       // Require user_id when mine_only (default)
       if (mineOnly && !config.userId) {
         return { error: "user_id not configured. Run /devin-setup and provide your user_id, or pass mine_only=false to list all users' sessions." };
       }
 
-      // Fetch more from API to account for client-side status filtering
-      const fetchLimit = statusFilter ? Math.min(limit * 5, 200) : limit;
+      // Fetch more from API to account for client-side filtering (status + archived)
+      const fetchLimit = (statusFilter || !includeArchived) ? Math.min(limit * 5, 200) : limit;
       let url = `/organizations/${orgId}/sessions?first=${fetchLimit}`;
       if (mineOnly) url += `&user_ids=${encodeURIComponent(config.userId)}`;
 
@@ -266,6 +268,11 @@ async function callTool(name, args = {}) {
       let sessions = Array.isArray(data.items) ? data.items
                    : Array.isArray(data.sessions) ? data.sessions
                    : Array.isArray(data.data) ? data.data : [];
+
+      // Filter out archived sessions unless include_archived=true
+      if (!includeArchived) {
+        sessions = sessions.filter((s) => !s.is_archived);
+      }
 
       // Client-side status filter (API doesn't support it server-side)
       if (statusFilter) {
@@ -318,9 +325,12 @@ async function callTool(name, args = {}) {
       }
 
       const data = await devinRequest("GET", url);
-      const sessions = Array.isArray(data.items) ? data.items
-                     : Array.isArray(data.sessions) ? data.sessions
-                     : Array.isArray(data.data) ? data.data : [];
+      let sessions = Array.isArray(data.items) ? data.items
+                   : Array.isArray(data.sessions) ? data.sessions
+                   : Array.isArray(data.data) ? data.data : [];
+
+      // Filter out archived sessions (same default as list_devin_sessions)
+      sessions = sessions.filter((s) => !s.is_archived);
 
       const totalAcus = sessions.reduce((sum, s) => sum + (s.acus_consumed || 0), 0);
       const byStatus = sessions.reduce((acc, s) => {
@@ -362,7 +372,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.0" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.1" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {

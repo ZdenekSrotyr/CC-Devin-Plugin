@@ -1,6 +1,6 @@
 ---
 description: Delegate a coding task to Devin AI
-allowed-tools: mcp__devin-mcp__create_devin_session, mcp__devin-mcp__get_devin_session, mcp__devin-mcp__send_devin_message, mcp__devin-mcp__list_devin_sessions
+allowed-tools: mcp__plugin_devin_devin-mcp__create_devin_session, mcp__plugin_devin_devin-mcp__get_devin_session, mcp__plugin_devin_devin-mcp__send_devin_message, mcp__plugin_devin_devin-mcp__list_devin_sessions, mcp__plugin_devin_devin-mcp__get_devin_stats
 argument-hint: <task description>
 ---
 

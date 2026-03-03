@@ -51,9 +51,8 @@ Example of a strong prompt:
 | Status | Meaning |
 |--------|---------|
 | `running` | Devin is actively working |
-| `waiting` | Devin needs input — send a message |
-| `finished` | Task completed |
-| `stopped` | Session was stopped manually |
+| `suspended` | Devin is paused — check `status_detail` (inactivity / user_request / usage_limit_exceeded) |
+| `stopped` | Session ended (manually stopped or completed) |
 
 ## Polling strategy
 

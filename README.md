@@ -50,6 +50,7 @@ Or natural language:
 | `get_devin_session` | Check status of a session |
 | `send_devin_message` | Send follow-up message to Devin |
 | `list_devin_sessions` | List recent sessions |
+| `get_devin_stats` | Get ACU consumption statistics |
 
 ## Removing credentials
 
