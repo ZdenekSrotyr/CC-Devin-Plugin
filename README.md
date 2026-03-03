@@ -22,13 +22,27 @@ Then restart Claude.
 
 ## Setup
 
-Run `/devin-setup` in a new conversation. Claude will ask for your credentials and save them securely — no environment variables or config files needed.
+Run `/devin-setup` in a new conversation. Credentials are **never required in chat**.
+
+### Option A — Environment variables (recommended, works everywhere including Cowork)
+
+Add to your `~/.zshrc` or `~/.zprofile`:
+
+```sh
+export DEVIN_API_TOKEN="your-token"
+export DEVIN_ORG_ID="your-org-id"
+export DEVIN_USER_ID="your-user-id"   # optional, enables personal filtering
+```
+
+Restart Claude/Cowork after saving.
+
+### Option B — Config file (Claude Code CLI)
+
+Run `/devin-setup` — Claude opens `~/.config/claude-plugins/devin/config.json` in your editor to fill in directly.
 
 You'll need:
 - **API Token** — [app.devin.ai/settings/api-keys](https://app.devin.ai/settings/api-keys)
 - **Organization ID** — [app.devin.ai/settings/organization](https://app.devin.ai/settings/organization)
-
-Credentials are stored in `~/.config/claude-plugins/devin/config.json` (mode 0600) — works on all platforms including sandboxed environments like Cowork.
 
 ## Usage
 

@@ -7,7 +7,7 @@ import { homedir } from "os";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
 
-// Config file — works on all platforms including sandboxed environments (Cowork, etc.)
+// Config file — fallback when env vars are not set
 const CONFIG_DIR  = `${homedir()}/.config/claude-plugins/devin`;
 const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
 
@@ -32,10 +32,12 @@ function configSet(token, orgId, userId) {
 }
 
 function loadConfig() {
+  // Priority: environment variables > config file
+  // Env vars work in all environments (shell profile, Cowork settings, CI)
   return {
-    token: configGet("DEVIN_API_TOKEN"),
-    orgId: configGet("DEVIN_ORG_ID"),
-    userId: configGet("DEVIN_USER_ID"),
+    token: process.env.DEVIN_API_TOKEN || configGet("DEVIN_API_TOKEN"),
+    orgId: process.env.DEVIN_ORG_ID   || configGet("DEVIN_ORG_ID"),
+    userId: process.env.DEVIN_USER_ID  || configGet("DEVIN_USER_ID"),
   };
 }
 
@@ -373,7 +375,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.5" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.6" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
