@@ -1,18 +1,44 @@
 #!/usr/bin/env node
-// MCP HTTP/SSE server — runs on the host Mac outside the Cowork sandbox
-// Cowork connects via type: sse in .mcp.json (http://127.0.0.1:3742/sse)
+// Self-contained MCP stdio server — no npm dependencies needed
+import { createInterface } from "readline";
 import { createServer } from "http";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
-import { randomUUID } from "crypto";
 
-const PORT = process.env.MCP_PORT ? parseInt(process.env.MCP_PORT, 10) : 3742;
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
+const IS_MACOS = process.platform === "darwin";
 
-// Config file — fallback when env vars are not set
+// macOS Keychain entries
+const KC_ACCOUNT = "devin";
+const KC_TOKEN   = "claude-devin-token";
+const KC_ORG     = "claude-devin-orgid";
+const KC_USER    = "claude-devin-userid";
+
+// Config file — fallback for non-macOS and sandboxed environments
 const CONFIG_DIR  = `${homedir()}/.config/claude-plugins/devin`;
 const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
+
+// --- macOS Keychain ---
+function keychainGet(service) {
+  try {
+    return execFileSync(
+      "security",
+      ["find-generic-password", "-a", KC_ACCOUNT, "-s", service, "-w"],
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function keychainSet(service, value) {
+  execFileSync(
+    "security",
+    ["add-generic-password", "-U", "-a", KC_ACCOUNT, "-s", service, "-w", value],
+    { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+  );
+}
 
 // --- Config file ---
 function configGet(key) {
@@ -34,17 +60,7 @@ function configSet(token, orgId, userId) {
   writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-function readConfigFile(path) {
-  try {
-    const cfg = JSON.parse(readFileSync(path, "utf8"));
-    return {
-      token: cfg.DEVIN_API_TOKEN || null,
-      orgId: cfg.DEVIN_ORG_ID   || null,
-      userId: cfg.DEVIN_USER_ID  || null,
-    };
-  } catch { return null; }
-}
-
+// --- Unified load/save ---
 function loadConfig() {
   // 1. Environment variables (highest priority)
   if (process.env.DEVIN_API_TOKEN && process.env.DEVIN_ORG_ID) {
@@ -55,15 +71,37 @@ function loadConfig() {
     };
   }
 
-  // 2. Config file
-  const local = readConfigFile(CONFIG_PATH);
-  if (local?.token) return local;
+  // 2. macOS Keychain
+  if (IS_MACOS) {
+    const token  = keychainGet(KC_TOKEN);
+    const orgId  = keychainGet(KC_ORG);
+    const userId = keychainGet(KC_USER);
+    if (token && orgId) return { token, orgId, userId: userId || null };
+  }
+
+  // 3. Config file (Linux / sandboxed macOS)
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    const token  = cfg.DEVIN_API_TOKEN || null;
+    const orgId  = cfg.DEVIN_ORG_ID   || null;
+    const userId = cfg.DEVIN_USER_ID  || null;
+    if (token && orgId) return { token, orgId, userId };
+  } catch { /* no file */ }
 
   return { token: null, orgId: null, userId: null };
 }
 
 function saveConfig(token, orgId, userId) {
-  configSet(token, orgId, userId);
+  if (IS_MACOS) {
+    // Save to Keychain (primary) + config file (fallback for sandboxed envs)
+    try {
+      keychainSet(KC_TOKEN, token);
+      keychainSet(KC_ORG, orgId);
+      if (userId) keychainSet(KC_USER, userId);
+    } catch { /* Keychain unavailable — config file only */ }
+  }
+  // Always write config file so it's available when Keychain is inaccessible
+  configSet(token, orgId, userId || null);
 }
 
 let config = loadConfig();
@@ -92,7 +130,7 @@ const TOOLS = [
   },
   {
     name: "setup_devin",
-    description: "Save Devin API credentials to ~/.config/claude-plugins/devin/config.json. Prefer open_config_file for security — use this only when the user explicitly provides credentials in chat.",
+    description: "Save Devin API credentials to macOS Keychain (primary) and ~/.config/claude-plugins/devin/config.json (fallback). Prefer open_config_file for security — use this only when the user explicitly provides credentials in chat.",
     inputSchema: {
       type: "object",
       properties: {
@@ -173,7 +211,6 @@ async function callTool(name, args = {}) {
 
   // open_config_file — starts a local web form for secure credential entry
   if (name === "open_config_file") {
-    // Find a free port
     const port = await new Promise((resolve, reject) => {
       let p = 19473;
       const tryPort = () => {
@@ -201,7 +238,7 @@ async function callTool(name, args = {}) {
   .note { margin-top: 1rem; font-size: 0.8rem; color: #888; }
 </style></head><body>
 <h1>Devin Plugin — Setup</h1>
-<p class="sub">Credentials are saved directly to the config file. Nothing is sent to chat.</p>
+<p class="sub">Credentials are saved to macOS Keychain. Nothing is sent to chat.</p>
 <form method="POST">
   <label>API Token <a class="hint" href="https://app.devin.ai/settings/api-keys" target="_blank">↗ where to find it</a></label>
   <input type="password" name="token" required placeholder="ey…" autocomplete="off">
@@ -211,7 +248,7 @@ async function callTool(name, args = {}) {
   <input type="text" name="user_id" placeholder="email|xxx or google-oauth2|xxx" autocomplete="off">
   <button type="submit">Save credentials</button>
 </form>
-<p class="note">This page is served locally by the Devin MCP server and closes automatically after saving.</p>
+<p class="note">Saved to macOS Keychain + config file. Page closes automatically after saving.</p>
 </body></html>`;
 
     const SUCCESS_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
@@ -231,12 +268,11 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
         req.on("data", chunk => { body += chunk; });
         req.on("end", () => {
           const p = new URLSearchParams(body);
-          const token = p.get("token")?.trim();
+          const token  = p.get("token")?.trim();
           const org_id = p.get("org_id")?.trim();
           const user_id = p.get("user_id")?.trim() || null;
           if (token && org_id) {
-            mkdirSync(CONFIG_DIR, { recursive: true });
-            configSet(token, org_id, user_id);
+            saveConfig(token, org_id, user_id);
             reloadConfig();
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end(SUCCESS_HTML);
@@ -253,7 +289,6 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
 
     srv.listen(port, "127.0.0.1");
 
-    // Try to open the browser automatically
     let opened = false;
     try {
       const opener = process.platform === "darwin" ? "open" : "xdg-open";
@@ -271,7 +306,7 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
     };
   }
 
-  // setup_devin — saves credentials to config file
+  // setup_devin — saves credentials directly
   if (name === "setup_devin") {
     const { token, org_id, user_id } = args;
     if (!token || !org_id) {
@@ -294,17 +329,17 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
       return { error: `Connection failed: ${e.message}` };
     }
 
-    // Save credentials
     try {
       saveConfig(token, org_id, user_id || null);
     } catch (e) {
       return { error: `Failed to save credentials: ${e.message}` };
     }
 
-    // Reload so subsequent tool calls use new credentials
     reloadConfig();
 
-    const storage = `config file (${CONFIG_PATH}, mode 0600)`;
+    const storage = IS_MACOS
+      ? `macOS Keychain + config file (${CONFIG_PATH})`
+      : `config file (${CONFIG_PATH}, mode 0600)`;
 
     const userNote = user_id
       ? ` User ID saved — personal session filtering enabled.`
@@ -316,7 +351,7 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
     };
   }
 
-  // All other tools require credentials — try reloading first
+  // All other tools require credentials
   if (!config.token || !config.orgId) {
     reloadConfig();
   }
@@ -353,7 +388,6 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
       if (!includeArchived) {
         sessions = sessions.filter((s) => !s.is_archived);
       }
-
       if (statusFilter) {
         sessions = sessions.filter((s) => statusFilter.includes(s.status));
       }
@@ -435,104 +469,37 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
   }
 }
 
-// --- MCP HTTP/SSE transport ---
+// --- MCP JSON-RPC stdio ---
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
+const ok  = (id, result) => send({ jsonrpc: "2.0", id, result });
+const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
 
-const sessions = new Map(); // sessionId -> SSE response stream
+const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
+const userStatus = config.userId ? `, user=${config.userId}` : "";
+process.stderr.write(`[devin-mcp] started (${credStatus}${userStatus})\n`);
 
-const server = createServer((req, res) => {
-  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
-
-  // CORS — allow local connections from any origin
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
-
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  // Health check
-  if (req.method === "GET" && url.pathname === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, server: "devin-mcp", version: "0.4.0" }));
-    return;
-  }
-
-  // SSE endpoint — client connects here to receive server messages
-  if (req.method === "GET" && url.pathname === "/sse") {
-    const sessionId = randomUUID();
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    // Tell the client where to POST its requests
-    res.write(`event: endpoint\ndata: /message?sessionId=${sessionId}\n\n`);
-    sessions.set(sessionId, res);
-    req.on("close", () => sessions.delete(sessionId));
-    return;
-  }
-
-  // Message endpoint — client POSTs JSON-RPC requests here
-  if (req.method === "POST" && url.pathname === "/message") {
-    const sessionId = url.searchParams.get("sessionId");
-    const session = sessions.get(sessionId);
-    if (!session) {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Session not found" }));
-      return;
-    }
-
-    let body = "";
-    req.on("data", chunk => { body += chunk; });
-    req.on("end", async () => {
-      let msg;
-      try { msg = JSON.parse(body); } catch {
-        res.writeHead(400);
-        res.end("Bad JSON");
-        return;
-      }
-      res.writeHead(202);
-      res.end("Accepted");
-
-      const { id, method, params } = msg;
-      const send  = (obj) => session.write(`event: message\ndata: ${JSON.stringify(obj)}\n\n`);
-      const ok    = (id, result) => send({ jsonrpc: "2.0", id, result });
-      const errFn = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
-
+createInterface({ input: process.stdin }).on("line", async (line) => {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  const { id, method, params } = msg;
+  try {
+    if (method === "initialize") {
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.10" } });
+    } else if (method === "tools/list") {
+      ok(id, { tools: TOOLS });
+    } else if (method === "tools/call") {
       try {
-        if (method === "initialize") {
-          ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.4.0" } });
-        } else if (method === "tools/list") {
-          ok(id, { tools: TOOLS });
-        } else if (method === "tools/call") {
-          try {
-            const result = await callTool(params.name, params.arguments);
-            ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
-          } catch (e) {
-            ok(id, { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true });
-          }
-        } else if (method === "notifications/initialized") {
-          // no response needed
-        } else {
-          errFn(id, -32601, `Method not found: ${method}`);
-        }
+        const result = await callTool(params.name, params.arguments);
+        ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
       } catch (e) {
-        errFn(id, -32603, e.message);
+        ok(id, { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true });
       }
-    });
-    return;
+    } else if (method === "notifications/initialized") {
+      // no response needed
+    } else {
+      err(id, -32601, `Method not found: ${method}`);
+    }
+  } catch (e) {
+    err(id, -32603, e.message);
   }
-
-  res.writeHead(404);
-  res.end("Not found");
-});
-
-server.listen(PORT, "127.0.0.1", () => {
-  const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
-  const userStatus = config.userId ? `, user=${config.userId}` : "";
-  process.stderr.write(`[devin-mcp] HTTP/SSE server listening on http://127.0.0.1:${PORT}/sse (${credStatus}${userStatus})\n`);
 });
