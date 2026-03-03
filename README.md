@@ -11,6 +11,15 @@ Delegate coding tasks to [Devin AI](https://app.devin.ai) directly from Claude. 
 | `devin-orchestration` skill | Guides Claude on when and how to use Devin |
 | `devin-mcp` server | Wraps the Devin API with MCP tools |
 
+## How it works
+
+The `devin-mcp` server runs as a **local HTTP/SSE process on your Mac** (outside any sandbox).
+Claude Code connects to it via `type: sse` in `.mcp.json`. This means:
+
+- Cowork sandbox doesn't block API calls (the server runs on the host, not inside the sandbox)
+- Other Claude Code environments work the same way
+- The server must be running before you open Claude/Cowork
+
 ## Installation
 
 ```bash
@@ -18,31 +27,61 @@ Delegate coding tasks to [Devin AI](https://app.devin.ai) directly from Claude. 
 /plugin install devin@devin
 ```
 
-Then restart Claude.
+Then **start the server** (see Setup below) and restart Claude/Cowork.
 
 ## Setup
 
+### Step 1 — Start the MCP server
+
+#### Option A — macOS LaunchAgent (recommended: auto-starts at login)
+
+```bash
+cd ~/.claude/plugins/devin/servers
+bash install-launchagent.sh
+```
+
+The server will start immediately and restart automatically at every login.
+
+Verify it's running:
+```bash
+curl http://127.0.0.1:3742/health
+# → {"ok":true,"server":"devin-mcp","version":"0.4.0"}
+```
+
+#### Option B — Manual start (one-off)
+
+```bash
+cd ~/.claude/plugins/devin/servers
+node index.js
+# or: npm start
+```
+
+Keep this terminal open (or run it with `nohup node index.js &`).
+
+#### Custom port
+
+Set `MCP_PORT` to use a different port:
+```bash
+MCP_PORT=4000 node index.js
+```
+Then also update the URL in `.mcp.json` accordingly.
+
+### Step 2 — Configure credentials
+
 Run `/devin-setup` in a new conversation. Credentials are **never required in chat**.
 
-### Option A — Environment variables (recommended, works everywhere including Cowork)
+You'll need:
+- **API Token** — [app.devin.ai/settings/api-keys](https://app.devin.ai/settings/api-keys)
+- **Organization ID** — [app.devin.ai/settings/organization](https://app.devin.ai/settings/organization)
 
-Add to your `~/.zshrc` or `~/.zprofile`:
+Credentials are saved to `~/.config/claude-plugins/devin/config.json` (mode 0600).
+Alternatively, set environment variables in `~/.zshrc` / `~/.zprofile`:
 
 ```sh
 export DEVIN_API_TOKEN="your-token"
 export DEVIN_ORG_ID="your-org-id"
 export DEVIN_USER_ID="your-user-id"   # optional, enables personal filtering
 ```
-
-Restart Claude/Cowork after saving.
-
-### Option B — Config file (Claude Code CLI)
-
-Run `/devin-setup` — Claude opens `~/.config/claude-plugins/devin/config.json` in your editor to fill in directly.
-
-You'll need:
-- **API Token** — [app.devin.ai/settings/api-keys](https://app.devin.ai/settings/api-keys)
-- **Organization ID** — [app.devin.ai/settings/organization](https://app.devin.ai/settings/organization)
 
 ## Usage
 
@@ -66,6 +105,23 @@ Or natural language:
 | `send_devin_message` | Send follow-up message to Devin |
 | `list_devin_sessions` | List recent sessions |
 | `get_devin_stats` | Get ACU consumption statistics |
+
+## Managing the LaunchAgent
+
+```bash
+# Stop
+launchctl unload ~/Library/LaunchAgents/com.claude.devin-mcp.plist
+
+# Start
+launchctl load -w ~/Library/LaunchAgents/com.claude.devin-mcp.plist
+
+# View logs
+tail -f /tmp/devin-mcp.log
+
+# Uninstall
+launchctl unload ~/Library/LaunchAgents/com.claude.devin-mcp.plist
+rm ~/Library/LaunchAgents/com.claude.devin-mcp.plist
+```
 
 ## Removing credentials
 

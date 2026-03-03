@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// Self-contained MCP stdio server — no npm dependencies needed
-import { createInterface } from "readline";
+// MCP HTTP/SSE server — runs on the host Mac outside the Cowork sandbox
+// Cowork connects via type: sse in .mcp.json (http://127.0.0.1:3742/sse)
 import { createServer } from "http";
 import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
+import { randomUUID } from "crypto";
 
+const PORT = process.env.MCP_PORT ? parseInt(process.env.MCP_PORT, 10) : 3742;
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
 
 // Config file — fallback when env vars are not set
@@ -292,7 +294,7 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
       return { error: `Connection failed: ${e.message}` };
     }
 
-    // Save credentials (Keychain on macOS, config file on Linux)
+    // Save credentials
     try {
       saveConfig(token, org_id, user_id || null);
     } catch (e) {
@@ -328,7 +330,6 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
 
   switch (name) {
     case "list_devin_sessions": {
-      // Defaults: mine_only=true, status=["running"], limit=10, include_archived=false
       const mineOnly = args.mine_only !== false;
       const limit = Math.min(args.limit || 10, 50);
       const statusArg = args.status ?? ["running"];
@@ -336,12 +337,10 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
                          : Array.isArray(statusArg) ? statusArg : [statusArg];
       const includeArchived = args.include_archived === true;
 
-      // Require user_id when mine_only (default)
       if (mineOnly && !config.userId) {
         return { error: "user_id not configured. Run /devin-setup and provide your user_id, or pass mine_only=false to list all users' sessions." };
       }
 
-      // Fetch more from API to account for client-side filtering (status + archived)
       const fetchLimit = (statusFilter || !includeArchived) ? Math.min(limit * 5, 200) : limit;
       let url = `/organizations/${orgId}/sessions?first=${fetchLimit}`;
       if (mineOnly) url += `&user_ids=${encodeURIComponent(config.userId)}`;
@@ -351,12 +350,10 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
                    : Array.isArray(data.sessions) ? data.sessions
                    : Array.isArray(data.data) ? data.data : [];
 
-      // Filter out archived sessions unless include_archived=true
       if (!includeArchived) {
         sessions = sessions.filter((s) => !s.is_archived);
       }
 
-      // Client-side status filter (API doesn't support it server-side)
       if (statusFilter) {
         sessions = sessions.filter((s) => statusFilter.includes(s.status));
       }
@@ -411,7 +408,6 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
                    : Array.isArray(data.sessions) ? data.sessions
                    : Array.isArray(data.data) ? data.data : [];
 
-      // Filter out archived sessions (same default as list_devin_sessions)
       sessions = sessions.filter((s) => !s.is_archived);
 
       const totalAcus = sessions.reduce((sum, s) => sum + (s.acus_consumed || 0), 0);
@@ -439,37 +435,104 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
   }
 }
 
-// --- MCP JSON-RPC stdio ---
-const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
-const ok  = (id, result) => send({ jsonrpc: "2.0", id, result });
-const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
+// --- MCP HTTP/SSE transport ---
 
-const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
-const userStatus = config.userId ? `, user=${config.userId}` : "";
-process.stderr.write(`[devin-mcp] started (${credStatus}${userStatus})\n`);
+const sessions = new Map(); // sessionId -> SSE response stream
 
-createInterface({ input: process.stdin }).on("line", async (line) => {
-  let msg;
-  try { msg = JSON.parse(line); } catch { return; }
-  const { id, method, params } = msg;
-  try {
-    if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.9" } });
-    } else if (method === "tools/list") {
-      ok(id, { tools: TOOLS });
-    } else if (method === "tools/call") {
-      try {
-        const result = await callTool(params.name, params.arguments);
-        ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
-      } catch (e) {
-        ok(id, { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true });
-      }
-    } else if (method === "notifications/initialized") {
-      // no response needed
-    } else {
-      err(id, -32601, `Method not found: ${method}`);
-    }
-  } catch (e) {
-    err(id, -32603, e.message);
+const server = createServer((req, res) => {
+  const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+
+  // CORS — allow local connections from any origin
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
   }
+
+  // Health check
+  if (req.method === "GET" && url.pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, server: "devin-mcp", version: "0.4.0" }));
+    return;
+  }
+
+  // SSE endpoint — client connects here to receive server messages
+  if (req.method === "GET" && url.pathname === "/sse") {
+    const sessionId = randomUUID();
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    // Tell the client where to POST its requests
+    res.write(`event: endpoint\ndata: /message?sessionId=${sessionId}\n\n`);
+    sessions.set(sessionId, res);
+    req.on("close", () => sessions.delete(sessionId));
+    return;
+  }
+
+  // Message endpoint — client POSTs JSON-RPC requests here
+  if (req.method === "POST" && url.pathname === "/message") {
+    const sessionId = url.searchParams.get("sessionId");
+    const session = sessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Session not found" }));
+      return;
+    }
+
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", async () => {
+      let msg;
+      try { msg = JSON.parse(body); } catch {
+        res.writeHead(400);
+        res.end("Bad JSON");
+        return;
+      }
+      res.writeHead(202);
+      res.end("Accepted");
+
+      const { id, method, params } = msg;
+      const send  = (obj) => session.write(`event: message\ndata: ${JSON.stringify(obj)}\n\n`);
+      const ok    = (id, result) => send({ jsonrpc: "2.0", id, result });
+      const errFn = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
+
+      try {
+        if (method === "initialize") {
+          ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.4.0" } });
+        } else if (method === "tools/list") {
+          ok(id, { tools: TOOLS });
+        } else if (method === "tools/call") {
+          try {
+            const result = await callTool(params.name, params.arguments);
+            ok(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
+          } catch (e) {
+            ok(id, { content: [{ type: "text", text: `Error: ${e.message}` }], isError: true });
+          }
+        } else if (method === "notifications/initialized") {
+          // no response needed
+        } else {
+          errFn(id, -32601, `Method not found: ${method}`);
+        }
+      } catch (e) {
+        errFn(id, -32603, e.message);
+      }
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end("Not found");
+});
+
+server.listen(PORT, "127.0.0.1", () => {
+  const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
+  const userStatus = config.userId ? `, user=${config.userId}` : "";
+  process.stderr.write(`[devin-mcp] HTTP/SSE server listening on http://127.0.0.1:${PORT}/sse (${credStatus}${userStatus})\n`);
 });
