@@ -1,46 +1,17 @@
 #!/usr/bin/env node
 // Self-contained MCP stdio server — no npm dependencies needed
 import { createInterface } from "readline";
-import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 
 const DEVIN_API_BASE = "https://api.devin.ai/v3beta1";
-const IS_MACOS = process.platform === "darwin";
 
-// macOS Keychain entries
-const KC_ACCOUNT = "devin";
-const KC_TOKEN   = "claude-devin-token";
-const KC_ORG     = "claude-devin-orgid";
-const KC_USER    = "claude-devin-userid";
-
-// Linux fallback: config file
+// Config file — works on all platforms including sandboxed environments (Cowork, etc.)
 const CONFIG_DIR  = `${homedir()}/.config/claude-plugins/devin`;
 const CONFIG_PATH = `${CONFIG_DIR}/config.json`;
 
-// --- macOS Keychain ---
-function keychainGet(service) {
-  try {
-    return execFileSync(
-      "security",
-      ["find-generic-password", "-a", KC_ACCOUNT, "-s", service, "-w"],
-      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-    ).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-function keychainSet(service, value) {
-  execFileSync(
-    "security",
-    ["add-generic-password", "-U", "-a", KC_ACCOUNT, "-s", service, "-w", value],
-    { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-  );
-}
-
-// --- Linux config file fallback ---
-function configFileGet(key) {
+// --- Config file ---
+function configGet(key) {
   try {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     return cfg[key] || null;
@@ -49,7 +20,7 @@ function configFileGet(key) {
   }
 }
 
-function configFileSet(token, orgId, userId) {
+function configSet(token, orgId, userId) {
   mkdirSync(CONFIG_DIR, { recursive: true });
   const existing = (() => {
     try { return JSON.parse(readFileSync(CONFIG_PATH, "utf8")); } catch { return {}; }
@@ -59,32 +30,16 @@ function configFileSet(token, orgId, userId) {
   writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-// --- Unified load/save ---
 function loadConfig() {
-  if (IS_MACOS) {
-    // Try Keychain first; fall back to config file (e.g. sandboxed environments like Cowork)
-    const token = keychainGet(KC_TOKEN) || configFileGet("DEVIN_API_TOKEN");
-    const orgId = keychainGet(KC_ORG)   || configFileGet("DEVIN_ORG_ID");
-    const userId = keychainGet(KC_USER) || configFileGet("DEVIN_USER_ID");
-    return { token, orgId, userId };
-  }
   return {
-    token: configFileGet("DEVIN_API_TOKEN"),
-    orgId: configFileGet("DEVIN_ORG_ID"),
-    userId: configFileGet("DEVIN_USER_ID"),
+    token: configGet("DEVIN_API_TOKEN"),
+    orgId: configGet("DEVIN_ORG_ID"),
+    userId: configGet("DEVIN_USER_ID"),
   };
 }
 
 function saveConfig(token, orgId, userId) {
-  if (IS_MACOS) {
-    // Save to both Keychain and config file so sandboxed environments (e.g. Cowork) can read credentials
-    keychainSet(KC_TOKEN, token);
-    keychainSet(KC_ORG, orgId);
-    if (userId) keychainSet(KC_USER, userId);
-    configFileSet(token, orgId, userId);
-  } else {
-    configFileSet(token, orgId, userId);
-  }
+  configSet(token, orgId, userId);
 }
 
 let config = loadConfig();
@@ -220,9 +175,7 @@ async function callTool(name, args = {}) {
     // Reload so subsequent tool calls use new credentials
     reloadConfig();
 
-    const storage = IS_MACOS
-      ? "macOS Keychain"
-      : `config file (${CONFIG_PATH}, mode 0600)`;
+    const storage = `config file (${CONFIG_PATH}, mode 0600)`;
 
     const userNote = user_id
       ? ` User ID saved — personal session filtering enabled.`
@@ -366,7 +319,7 @@ const err = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, mes
 
 const credStatus = (config.token && config.orgId) ? "credentials found" : "no credentials — run /devin-setup";
 const userStatus = config.userId ? `, user=${config.userId}` : "";
-process.stderr.write(`[devin-mcp] started (${IS_MACOS ? "macOS" : "Linux"}, ${credStatus}${userStatus})\n`);
+process.stderr.write(`[devin-mcp] started (${credStatus}${userStatus})\n`);
 
 createInterface({ input: process.stdin }).on("line", async (line) => {
   let msg;
@@ -374,7 +327,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.2" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.3" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {

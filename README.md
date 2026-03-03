@@ -28,7 +28,7 @@ You'll need:
 - **API Token** — [app.devin.ai/settings/api-keys](https://app.devin.ai/settings/api-keys)
 - **Organization ID** — [app.devin.ai/settings/organization](https://app.devin.ai/settings/organization)
 
-Credentials are stored in **macOS Keychain** (macOS) or `~/.config/claude-plugins/devin/config.json` with mode 0600 (Linux).
+Credentials are stored in `~/.config/claude-plugins/devin/config.json` (mode 0600) — works on all platforms including sandboxed environments like Cowork.
 
 ## Usage
 
@@ -54,13 +54,6 @@ Or natural language:
 
 ## Removing credentials
 
-**macOS:**
-```bash
-security delete-generic-password -a devin -s claude-devin-token
-security delete-generic-password -a devin -s claude-devin-orgid
-```
-
-**Linux:**
 ```bash
 rm ~/.config/claude-plugins/devin/config.json
 ```
