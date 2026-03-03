@@ -18,7 +18,7 @@ That is all. Do not proceed further.
 
 **If it IS available**, proceed:
 
-Tell the user that their credentials will be stored securely — in macOS Keychain on macOS, or in a user-only config file (`~/.config/claude-plugins/devin/config.json`) on Linux.
+Tell the user that their credentials will be stored securely — on macOS in both **macOS Keychain** and `~/.config/claude-plugins/devin/config.json` (so sandboxed environments like Cowork can access them too), on Linux only in the config file with mode 0600.
 
 Ask for their Devin credentials in order:
 

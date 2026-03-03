@@ -62,11 +62,11 @@ function configFileSet(token, orgId, userId) {
 // --- Unified load/save ---
 function loadConfig() {
   if (IS_MACOS) {
-    return {
-      token: keychainGet(KC_TOKEN),
-      orgId: keychainGet(KC_ORG),
-      userId: keychainGet(KC_USER),
-    };
+    // Try Keychain first; fall back to config file (e.g. sandboxed environments like Cowork)
+    const token = keychainGet(KC_TOKEN) || configFileGet("DEVIN_API_TOKEN");
+    const orgId = keychainGet(KC_ORG)   || configFileGet("DEVIN_ORG_ID");
+    const userId = keychainGet(KC_USER) || configFileGet("DEVIN_USER_ID");
+    return { token, orgId, userId };
   }
   return {
     token: configFileGet("DEVIN_API_TOKEN"),
@@ -77,9 +77,11 @@ function loadConfig() {
 
 function saveConfig(token, orgId, userId) {
   if (IS_MACOS) {
+    // Save to both Keychain and config file so sandboxed environments (e.g. Cowork) can read credentials
     keychainSet(KC_TOKEN, token);
     keychainSet(KC_ORG, orgId);
     if (userId) keychainSet(KC_USER, userId);
+    configFileSet(token, orgId, userId);
   } else {
     configFileSet(token, orgId, userId);
   }
@@ -372,7 +374,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.1" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.2" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
