@@ -15,24 +15,37 @@ That is all. Do not proceed further.
 
 ---
 
-**If it IS available**, proceed with the secure setup flow:
+**If it IS available**, call `open_config_file` first and follow the branch based on the response:
 
-1. Call `open_config_file`. This creates a config file template at `~/.config/claude-plugins/devin/config.json` and tries to open it in the system editor.
+**Branch A — `is_sandbox: true` (Cowork or other sandboxed environment):**
 
-2. Tell the user:
-   - The file has been created/opened with placeholder values
-   - They need to fill in their credentials **directly in the file** — not in the chat
-   - Where to find them:
-     - **API Token** — https://app.devin.ai/settings/api-keys
-     - **Organization ID** — https://app.devin.ai/settings/organization
-     - **User ID** (optional, format `email|xxx`) — visible in session details, enables personal filtering
-   - After saving the file, tell Claude to continue
+Tell the user:
+> "You're running in a sandboxed environment (Cowork). The filesystem here is isolated and temporary, so credentials need to be provided directly. They'll be encrypted in transit and stored only for this session's config.
+>
+> Please share your credentials — I'll write them to the config file immediately and won't display them back.
+>
+> - **API Token** → app.devin.ai/settings/api-keys
+> - **Organization ID** → app.devin.ai/settings/organization
+> - **User ID** (optional, format `email|xxx`) → visible in session details"
 
-3. Once the user confirms they've saved the file, call `list_devin_sessions` with `status="all"` and `limit=1` as a verification check.
-   - If it returns sessions or an empty list → credentials are valid, setup complete
-   - If it returns an auth error → ask the user to double-check their token and org ID in the config file
+Once the user provides token and org_id, call `setup_devin`. Do not repeat or display the credentials.
 
-4. If verification succeeds, tell the user they're all set and can use `/devin` to delegate tasks.
+**Branch B — `opened_in_editor: true` (normal environment, editor opened):**
 
-**Fallback (user insists on providing credentials in chat):**
-If the user explicitly provides their token and org_id in the message, call `setup_devin` with those values. Do not show, log, or repeat the token back.
+Tell the user their config file is open in the editor. They should:
+1. Replace the placeholder values with their real credentials
+2. Save the file
+3. Tell Claude when done
+
+After they confirm, call `list_devin_sessions` with `status="all"` and `limit=1` to verify.
+
+**Branch C — `opened_in_editor: false`, `is_sandbox: false` (normal env, editor failed):**
+
+Tell the user to open this file manually and fill in their credentials:
+`~/.config/claude-plugins/devin/config.json`
+
+After they confirm, call `list_devin_sessions` with `status="all"` and `limit=1` to verify.
+
+---
+
+**After successful verification** (any branch): tell the user they're all set and can use `/devin` to delegate tasks. If `user_id` was not provided, suggest they add it later by re-running `/devin-setup`.

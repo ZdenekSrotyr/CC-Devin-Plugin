@@ -148,8 +148,18 @@ const TOOLS = [
 // --- Tool handler ---
 async function callTool(name, args = {}) {
 
-  // open_config_file — creates template and opens in system editor
+  // open_config_file — creates template and opens in system editor (or detects sandbox)
   if (name === "open_config_file") {
+    const isSandbox = homedir().startsWith("/sessions/");
+
+    if (isSandbox) {
+      return {
+        ok: false,
+        is_sandbox: true,
+        message: "Running in a sandboxed environment (Cowork). The config path is ephemeral and not accessible from your filesystem. Please provide your credentials in chat — they will be saved for this session via setup_devin.",
+      };
+    }
+
     mkdirSync(CONFIG_DIR, { recursive: true });
     const template = {
       DEVIN_API_TOKEN: "paste-your-token-here",
@@ -169,11 +179,12 @@ async function callTool(name, args = {}) {
     }
     return {
       ok: true,
+      is_sandbox: false,
       config_path: CONFIG_PATH,
       opened_in_editor: opened,
       message: opened
         ? `Config file opened in your editor. Fill in your credentials and save, then I'll verify the connection.`
-        : `Could not open editor automatically. Please open this file manually and fill in your credentials:\n${CONFIG_PATH}`,
+        : `Could not open editor automatically. Please open this file manually:\n${CONFIG_PATH}`,
     };
   }
 
@@ -362,7 +373,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.4" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.5" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
