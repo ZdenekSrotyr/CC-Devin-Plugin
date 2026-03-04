@@ -269,6 +269,41 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
 <p><a href="/">Try again</a></p>
 </body></html>`;
 
+    const manualUserIdHtml = (token, org_id) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Setup — Enter User ID</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 1rem; color: #111; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
+  .warn { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 0.6rem 0.8rem;
+          font-size: 0.88rem; color: #5a4000; margin-bottom: 1.2rem; }
+  label { display: block; margin-top: 1.2rem; font-weight: 600; font-size: 0.9rem; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; margin-top: 0.3rem;
+                     border: 1px solid #ccc; border-radius: 6px; font-size: 0.95rem; }
+  ol { padding-left: 1.3rem; font-size: 0.88rem; color: #444; line-height: 1.7; }
+  button { margin-top: 1.8rem; width: 100%; padding: 0.7rem; background: #0066cc;
+           color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; }
+  button:hover { background: #0052a3; }
+</style></head><body>
+<h1>Devin Plugin — Setup</h1>
+<div class="warn">Your API token doesn't have permission to look up accounts automatically.
+Please enter your User ID manually.</div>
+<p style="font-size:0.9rem;color:#444;">How to find your User ID:</p>
+<ol>
+  <li>Open <a href="https://app.devin.ai" target="_blank">app.devin.ai</a> in your browser</li>
+  <li>Start any session (or open an existing one)</li>
+  <li>The URL will contain your session — ask Devin in the chat: <em>"What is my user_id?"</em><br>
+      or check your profile at <a href="https://app.devin.ai/settings" target="_blank">app.devin.ai/settings</a></li>
+  <li>It looks like: <code>google-oauth2|123456789</code> or <code>email|abc...</code></li>
+</ol>
+<form method="POST" action="/save-manual">
+  <input type="hidden" name="token" value="${token}">
+  <input type="hidden" name="org_id" value="${org_id}">
+  <label>User ID</label>
+  <input type="text" name="user_id" required placeholder="google-oauth2|…" autocomplete="off">
+  <button type="submit">Save</button>
+</form>
+</body></html>`;
+
     const srv = createServer((req, res) => {
       const reqUrl = new URL(req.url, `http://127.0.0.1:${port}`);
 
@@ -315,9 +350,15 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
               `https://api.devin.ai/v3/enterprise/organizations/${org_id}/members/users`,
               { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
             );
+            if (mRes.status === 403) {
+              // Token lacks permission — fall back to manual user_id entry
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(manualUserIdHtml(token, org_id));
+              return;
+            }
             if (!mRes.ok) {
               res.writeHead(200, { "Content-Type": "text/html" });
-              res.end(errorHtml(`Could not fetch org members (HTTP ${mRes.status}). Check that your token has the required permissions.`));
+              res.end(errorHtml(`Could not fetch org members (HTTP ${mRes.status}).`));
               return;
             }
             const mData = await mRes.json();
@@ -339,6 +380,29 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
           reloadConfig();
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(successHtml(matchedUser.name || email));
+          setTimeout(() => srv.close(), 1500);
+        });
+        return;
+      }
+
+      // Manual user_id save (fallback when members API returns 403)
+      if (req.method === "POST" && reqUrl.pathname === "/save-manual") {
+        let body = "";
+        req.on("data", chunk => { body += chunk; });
+        req.on("end", () => {
+          const p = new URLSearchParams(body);
+          const token   = p.get("token")?.trim();
+          const org_id  = p.get("org_id")?.trim();
+          const user_id = p.get("user_id")?.trim();
+          if (!token || !org_id || !user_id) {
+            res.writeHead(400, { "Content-Type": "text/plain" });
+            res.end("All fields are required.");
+            return;
+          }
+          saveConfig(token, org_id, user_id);
+          reloadConfig();
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(successHtml(null));
           setTimeout(() => srv.close(), 1500);
         });
         return;
@@ -544,7 +608,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.15" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.16" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
