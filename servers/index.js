@@ -251,12 +251,22 @@ async function callTool(name, args = {}) {
 <p class="note">Saved to macOS Keychain + config file. Page closes automatically after saving.</p>
 </body></html>`;
 
-    const SUCCESS_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+    const successHtml = (sessions) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <title>Devin Setup — Done</title>
 <style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 1rem;text-align:center;}
-h1{color:#1a7f37;}p{color:#555;}</style></head><body>
-<h1>✓ Credentials saved</h1>
-<p>You can close this tab and return to Claude.</p>
+h1{color:#1a7f37;}p{color:#555;}.detail{font-size:0.85rem;color:#888;margin-top:0.5rem;}</style></head><body>
+<h1>✓ Credentials saved & verified</h1>
+<p>Plugin is ready — no restart needed.</p>
+<p class="detail">Found ${sessions} session(s). You can close this tab.</p>
+</body></html>`;
+
+    const errorHtml = (msg) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Setup — Error</title>
+<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 1rem;text-align:center;}
+h1{color:#d1242f;}p{color:#555;}</style></head><body>
+<h1>✗ Invalid credentials</h1>
+<p>${msg}</p>
+<p><a href="/">Try again</a></p>
 </body></html>`;
 
     const srv = createServer((req, res) => {
@@ -266,21 +276,42 @@ h1{color:#1a7f37;}p{color:#555;}</style></head><body>
       } else if (req.method === "POST") {
         let body = "";
         req.on("data", chunk => { body += chunk; });
-        req.on("end", () => {
+        req.on("end", async () => {
           const p = new URLSearchParams(body);
           const token  = p.get("token")?.trim();
           const org_id = p.get("org_id")?.trim();
           const user_id = p.get("user_id")?.trim() || null;
-          if (token && org_id) {
-            saveConfig(token, org_id, user_id);
-            reloadConfig();
-            res.writeHead(200, { "Content-Type": "text/html" });
-            res.end(SUCCESS_HTML);
-            setTimeout(() => srv.close(), 1500);
-          } else {
+          if (!token || !org_id) {
             res.writeHead(400, { "Content-Type": "text/plain" });
             res.end("Token and Org ID are required.");
+            return;
           }
+          // Verify credentials against Devin API before saving
+          let sessionCount = 0;
+          try {
+            const apiRes = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=1`, {
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            });
+            if (!apiRes.ok) {
+              const detail = await apiRes.text().catch(() => "");
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(errorHtml(`API returned ${apiRes.status}: ${detail.slice(0, 100)}`));
+              return;
+            }
+            const data = await apiRes.json();
+            sessionCount = Array.isArray(data.items) ? data.items.length
+                         : Array.isArray(data.sessions) ? data.sessions.length : 0;
+          } catch (e) {
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end(errorHtml(`Connection failed: ${e.message}`));
+            return;
+          }
+          // Save and reload in-process — no restart needed
+          saveConfig(token, org_id, user_id);
+          reloadConfig();
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(successHtml(sessionCount));
+          setTimeout(() => srv.close(), 1500);
         });
       } else {
         res.writeHead(405); res.end();
@@ -484,7 +515,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.11" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.12" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
