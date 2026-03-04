@@ -1,6 +1,6 @@
 {
   "name": "devin",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Delegate coding tasks to Devin AI as a sub-agent",
   "author": {
     "name": "Zdeněk Šrotýř"

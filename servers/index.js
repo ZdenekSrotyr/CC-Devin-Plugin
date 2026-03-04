@@ -244,20 +244,19 @@ async function callTool(name, args = {}) {
   <input type="password" name="token" required placeholder="ey…" autocomplete="off">
   <label>Organization ID <a class="hint" href="https://app.devin.ai/settings/organization" target="_blank">↗ where to find it</a></label>
   <input type="text" name="org_id" required placeholder="org_…" autocomplete="off">
-  <label>User ID <span style="font-weight:400;color:#888">(optional — enables personal session filtering)</span></label>
-  <input type="text" name="user_id" placeholder="email|xxx or google-oauth2|xxx" autocomplete="off">
+  <label>User ID <span style="font-weight:400;color:#888">(optional — leave blank to auto-detect)</span></label>
+  <input type="text" name="user_id" placeholder="leave blank — we'll show you a picker" autocomplete="off">
   <button type="submit">Save credentials</button>
 </form>
 <p class="note">Saved to macOS Keychain + config file. Page closes automatically after saving.</p>
 </body></html>`;
 
-    const successHtml = (sessions) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+    const successHtml = () => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <title>Devin Setup — Done</title>
 <style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 1rem;text-align:center;}
-h1{color:#1a7f37;}p{color:#555;}.detail{font-size:0.85rem;color:#888;margin-top:0.5rem;}</style></head><body>
+h1{color:#1a7f37;}p{color:#555;}</style></head><body>
 <h1>✓ Credentials saved & verified</h1>
-<p>Plugin is ready — no restart needed.</p>
-<p class="detail">Found ${sessions} session(s). You can close this tab.</p>
+<p>Plugin is ready — no restart needed. You can close this tab.</p>
 </body></html>`;
 
     const errorHtml = (msg) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
@@ -269,27 +268,62 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
 <p><a href="/">Try again</a></p>
 </body></html>`;
 
+    const pickUserHtml = (token, org_id, userIds) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Setup — Pick your User ID</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 1rem;color:#111;}
+  h1{font-size:1.2rem;} p{color:#666;font-size:0.9rem;}
+  .uid{display:block;padding:0.6rem 0.8rem;margin:0.4rem 0;border:1px solid #ddd;border-radius:6px;
+       cursor:pointer;font-family:monospace;font-size:0.85rem;text-decoration:none;color:#111;}
+  .uid:hover{background:#f0f4ff;border-color:#0066cc;}
+  .skip{margin-top:1rem;font-size:0.8rem;color:#888;}
+  .skip a{color:#0066cc;}
+</style></head><body>
+<h1>Which User ID is yours?</h1>
+<p>Select your account — credentials will be saved immediately.</p>
+${userIds.map(uid => `<a class="uid" href="/save-userid?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(org_id)}&user_id=${encodeURIComponent(uid)}">${uid}</a>`).join("")}
+<p class="skip">Not sure? <a href="/save-userid?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(org_id)}&user_id=">Skip — save without User ID</a></p>
+</body></html>`;
+
     const srv = createServer((req, res) => {
-      if (req.method === "GET") {
+      const reqUrl = new URL(req.url, `http://127.0.0.1:${port}`);
+
+      if (req.method === "GET" && reqUrl.pathname === "/") {
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(FORM_HTML);
-      } else if (req.method === "POST") {
+        return;
+      }
+
+      // Final save after user picks their user_id
+      if (req.method === "GET" && reqUrl.pathname === "/save-userid") {
+        const token   = reqUrl.searchParams.get("token");
+        const org_id  = reqUrl.searchParams.get("org_id");
+        const user_id = reqUrl.searchParams.get("user_id") || null;
+        saveConfig(token, org_id, user_id);
+        reloadConfig();
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(successHtml());
+        setTimeout(() => srv.close(), 1500);
+        return;
+      }
+
+      if (req.method === "POST" && reqUrl.pathname === "/") {
         let body = "";
         req.on("data", chunk => { body += chunk; });
         req.on("end", async () => {
           const p = new URLSearchParams(body);
-          const token  = p.get("token")?.trim();
-          const org_id = p.get("org_id")?.trim();
+          const token   = p.get("token")?.trim();
+          const org_id  = p.get("org_id")?.trim();
           const user_id = p.get("user_id")?.trim() || null;
           if (!token || !org_id) {
             res.writeHead(400, { "Content-Type": "text/plain" });
             res.end("Token and Org ID are required.");
             return;
           }
-          // Verify credentials against Devin API before saving
-          let sessionCount = 0;
+          // Verify credentials
+          let sessions = [];
           try {
-            const apiRes = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=1`, {
+            const apiRes = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=50`, {
               headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
             });
             if (!apiRes.ok) {
@@ -299,23 +333,32 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
               return;
             }
             const data = await apiRes.json();
-            sessionCount = Array.isArray(data.items) ? data.items.length
-                         : Array.isArray(data.sessions) ? data.sessions.length : 0;
+            sessions = Array.isArray(data.items) ? data.items : [];
           } catch (e) {
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end(errorHtml(`Connection failed: ${e.message}`));
             return;
           }
-          // Save and reload in-process — no restart needed
-          saveConfig(token, org_id, user_id);
-          reloadConfig();
+
+          // If user_id already looks valid, save directly
+          if (user_id && user_id.includes("|")) {
+            saveConfig(token, org_id, user_id);
+            reloadConfig();
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end(successHtml());
+            setTimeout(() => srv.close(), 1500);
+            return;
+          }
+
+          // No valid user_id — show picker with unique IDs from sessions
+          const userIds = [...new Set(sessions.map(s => s.user_id).filter(Boolean))];
           res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(successHtml(sessionCount));
-          setTimeout(() => srv.close(), 1500);
+          res.end(pickUserHtml(token, org_id, userIds));
         });
-      } else {
-        res.writeHead(405); res.end();
+        return;
       }
+
+      res.writeHead(404); res.end();
     });
 
     srv.listen(port, "127.0.0.1");
@@ -515,7 +558,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.12" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.13" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
