@@ -269,39 +269,44 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
 <p><a href="/">Try again</a></p>
 </body></html>`;
 
-    const manualUserIdHtml = (token, org_id) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<title>Devin Setup — Enter User ID</title>
+    const sessionPickerHtml = (token, org_id, byUser) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Setup — Which account is yours?</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 1rem; color: #111; }
-  h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
-  .warn { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 0.6rem 0.8rem;
-          font-size: 0.88rem; color: #5a4000; margin-bottom: 1.2rem; }
-  label { display: block; margin-top: 1.2rem; font-weight: 600; font-size: 0.9rem; }
-  input[type=text] { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; margin-top: 0.3rem;
-                     border: 1px solid #ccc; border-radius: 6px; font-size: 0.95rem; }
-  ol { padding-left: 1.3rem; font-size: 0.88rem; color: #444; line-height: 1.7; }
-  button { margin-top: 1.8rem; width: 100%; padding: 0.7rem; background: #0066cc;
-           color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; }
-  button:hover { background: #0052a3; }
+  body { font-family: system-ui, sans-serif; max-width: 500px; margin: 60px auto; padding: 0 1rem; color: #111; }
+  h1 { font-size: 1.2rem; margin-bottom: 0.25rem; }
+  p.sub { color: #666; font-size: 0.9rem; margin-top: 0; margin-bottom: 1.2rem; }
+  .card { border: 1px solid #ddd; border-radius: 8px; margin: 0.7rem 0; overflow: hidden; }
+  .card-top { display: flex; align-items: center; justify-content: space-between;
+              padding: 0.7rem 1rem; background: #f8f9fa; }
+  .login-type { font-weight: 600; font-size: 0.9rem; }
+  .login-type .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+                       font-size: 0.78rem; margin-right: 6px; }
+  .badge-google { background: #e8f0fe; color: #1a56db; }
+  .badge-email  { background: #f0fdf4; color: #166534; }
+  .badge-other  { background: #f3f4f6; color: #374151; }
+  .btn-pick { padding: 0.4rem 0.9rem; background: #0066cc; color: #fff; border: none;
+              border-radius: 5px; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+  .btn-pick:hover { background: #0052a3; }
+  .sessions { padding: 0.4rem 1rem 0.7rem; font-size: 0.82rem; color: #555; }
+  .sessions li { margin: 0.2rem 0; list-style: disc; margin-left: 1rem; }
 </style></head><body>
-<h1>Devin Plugin — Setup</h1>
-<div class="warn">Your API token doesn't have permission to look up accounts automatically.
-Please enter your User ID manually.</div>
-<p style="font-size:0.9rem;color:#444;">How to find your User ID:</p>
-<ol>
-  <li>Open <a href="https://app.devin.ai" target="_blank">app.devin.ai</a> in your browser</li>
-  <li>Start any session (or open an existing one)</li>
-  <li>The URL will contain your session — ask Devin in the chat: <em>"What is my user_id?"</em><br>
-      or check your profile at <a href="https://app.devin.ai/settings" target="_blank">app.devin.ai/settings</a></li>
-  <li>It looks like: <code>google-oauth2|123456789</code> or <code>email|abc...</code></li>
-</ol>
-<form method="POST" action="/save-manual">
-  <input type="hidden" name="token" value="${token}">
-  <input type="hidden" name="org_id" value="${org_id}">
-  <label>User ID</label>
-  <input type="text" name="user_id" required placeholder="google-oauth2|…" autocomplete="off">
-  <button type="submit">Save</button>
-</form>
+<h1>Which account is yours?</h1>
+<p class="sub">Recognize your recent sessions below and click <strong>This is me</strong>.</p>
+${byUser.map(({ uid, loginType, titles }) => `<div class="card">
+  <form method="POST" action="/save-manual" style="margin:0">
+    <input type="hidden" name="token" value="${token}">
+    <input type="hidden" name="org_id" value="${org_id}">
+    <input type="hidden" name="user_id" value="${uid}">
+    <div class="card-top">
+      <span class="login-type">
+        <span class="badge badge-${loginType === "Google" ? "google" : loginType === "Email" ? "email" : "other"}">${loginType}</span>
+        account
+      </span>
+      <button type="submit" class="btn-pick">This is me</button>
+    </div>
+  </form>
+  <div class="sessions"><ul>${titles.map(t => `<li>${t}</li>`).join("")}</ul></div>
+</div>`).join("")}
 </body></html>`;
 
     const srv = createServer((req, res) => {
@@ -351,9 +356,44 @@ Please enter your User ID manually.</div>
               { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
             );
             if (mRes.status === 403) {
-              // Token lacks permission — fall back to manual user_id entry
+              // Token lacks permission — fall back to session-based picker
+              let sessions = [];
+              try {
+                const sRes = await fetch(
+                  `${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=50`,
+                  { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
+                );
+                if (sRes.ok) {
+                  const sData = await sRes.json();
+                  sessions = Array.isArray(sData.items) ? sData.items : [];
+                }
+              } catch { /* show error below */ }
+
+              if (sessions.length === 0) {
+                res.writeHead(200, { "Content-Type": "text/html" });
+                res.end(errorHtml("No sessions found in your organization. Create a session in Devin first, then run setup again."));
+                return;
+              }
+
+              // Group by user_id, collect up to 3 session titles per user
+              const userMap = new Map();
+              for (const s of sessions) {
+                const uid = s.user_id;
+                if (!uid) continue;
+                if (!userMap.has(uid)) userMap.set(uid, []);
+                if (userMap.get(uid).length < 3) userMap.get(uid).push(s.title || "(no title)");
+              }
+              const loginLabel = (uid) => {
+                if (uid.startsWith("google-oauth2|")) return "Google";
+                if (uid.startsWith("email|")) return "Email";
+                return uid.split("|")[0] || "Other";
+              };
+              const byUser = [...userMap.entries()].map(([uid, titles]) => ({
+                uid, titles, loginType: loginLabel(uid),
+              }));
+
               res.writeHead(200, { "Content-Type": "text/html" });
-              res.end(manualUserIdHtml(token, org_id));
+              res.end(sessionPickerHtml(token, org_id, byUser));
               return;
             }
             if (!mRes.ok) {
@@ -608,7 +648,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.16" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.17" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
