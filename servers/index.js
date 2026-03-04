@@ -269,43 +269,59 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
 <p><a href="/">Try again</a></p>
 </body></html>`;
 
+    const loginIcon = (type) => ({ Google: "🔵", Email: "📧", GitHub: "⚫" }[type] || "👤");
+    const badgeClass = (type) => ({ Google: "badge-google", Email: "badge-email", GitHub: "badge-github" }[type] || "badge-other");
     const sessionPickerHtml = (token, org_id, byUser) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <title>Devin Setup — Which account is yours?</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 500px; margin: 60px auto; padding: 0 1rem; color: #111; }
-  h1 { font-size: 1.2rem; margin-bottom: 0.25rem; }
-  p.sub { color: #666; font-size: 0.9rem; margin-top: 0; margin-bottom: 1.2rem; }
-  .card { border: 1px solid #ddd; border-radius: 8px; margin: 0.7rem 0; overflow: hidden; }
+  body { font-family: system-ui, sans-serif; max-width: 560px; margin: 60px auto; padding: 0 1rem; color: #111; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
+  p.sub { color: #666; font-size: 0.9rem; margin-top: 0; margin-bottom: 1.5rem; }
+  .card { border: 1px solid #ddd; border-radius: 10px; margin: 0.8rem 0; overflow: hidden; transition: border-color 0.15s; }
+  .card:hover { border-color: #0066cc; }
   .card-top { display: flex; align-items: center; justify-content: space-between;
-              padding: 0.7rem 1rem; background: #f8f9fa; }
-  .login-type { font-weight: 600; font-size: 0.9rem; }
-  .login-type .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
-                       font-size: 0.78rem; margin-right: 6px; }
+              padding: 0.8rem 1rem; background: #f8f9fa; gap: 0.5rem; }
+  .account-info { display: flex; align-items: center; gap: 0.6rem; flex: 1; min-width: 0; }
+  .account-icon { font-size: 1.1rem; flex-shrink: 0; }
+  .account-label { font-weight: 600; font-size: 0.95rem; }
+  .session-count { font-size: 0.78rem; color: #888; margin-top: 1px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
   .badge-google { background: #e8f0fe; color: #1a56db; }
   .badge-email  { background: #f0fdf4; color: #166534; }
+  .badge-github { background: #f3f4f6; color: #24292e; }
   .badge-other  { background: #f3f4f6; color: #374151; }
-  .btn-pick { padding: 0.4rem 0.9rem; background: #0066cc; color: #fff; border: none;
-              border-radius: 5px; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+  .btn-pick { padding: 0.45rem 1rem; background: #0066cc; color: #fff; border: none;
+              border-radius: 6px; font-size: 0.85rem; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
   .btn-pick:hover { background: #0052a3; }
-  .sessions { padding: 0.4rem 1rem 0.7rem; font-size: 0.82rem; color: #555; }
-  .sessions li { margin: 0.2rem 0; list-style: disc; margin-left: 1rem; }
+  .sessions { padding: 0.5rem 1rem 0.8rem 1rem; border-top: 1px solid #f0f0f0; }
+  .sessions-label { font-size: 0.75rem; color: #999; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
+  .sessions ul { margin: 0; padding: 0; list-style: none; }
+  .sessions li { font-size: 0.83rem; color: #444; padding: 0.2rem 0; border-bottom: 1px solid #f5f5f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sessions li:last-child { border-bottom: none; }
+  .sessions li::before { content: "›"; margin-right: 0.4rem; color: #bbb; }
 </style></head><body>
 <h1>Which account is yours?</h1>
-<p class="sub">Recognize your recent sessions below and click <strong>This is me</strong>.</p>
-${byUser.map(({ uid, loginType, titles }) => `<div class="card">
+<p class="sub">Your recent sessions are shown below. Find the ones you recognize and click <strong>This is me</strong>.</p>
+${byUser.map(({ uid, loginType, titles, count }) => `<div class="card">
   <form method="POST" action="/save-manual" style="margin:0">
     <input type="hidden" name="token" value="${token}">
     <input type="hidden" name="org_id" value="${org_id}">
     <input type="hidden" name="user_id" value="${uid}">
     <div class="card-top">
-      <span class="login-type">
-        <span class="badge badge-${loginType === "Google" ? "google" : loginType === "Email" ? "email" : "other"}">${loginType}</span>
-        account
-      </span>
+      <div class="account-info">
+        <span class="account-icon">${loginIcon(loginType)}</span>
+        <div>
+          <div class="account-label"><span class="badge ${badgeClass(loginType)}">${loginType}</span> account</div>
+          <div class="session-count">${count} session${count !== 1 ? "s" : ""} in org</div>
+        </div>
+      </div>
       <button type="submit" class="btn-pick">This is me</button>
     </div>
   </form>
-  <div class="sessions"><ul>${titles.map(t => `<li>${t}</li>`).join("")}</ul></div>
+  <div class="sessions">
+    <div class="sessions-label">Recent sessions</div>
+    <ul>${titles.map(t => `<li>${t}</li>`).join("")}</ul>
+  </div>
 </div>`).join("")}
 </body></html>`;
 
@@ -375,22 +391,24 @@ ${byUser.map(({ uid, loginType, titles }) => `<div class="card">
                 return;
               }
 
-              // Group by user_id, collect up to 3 session titles per user
+              // Group by user_id, collect up to 5 session titles + count per user
               const userMap = new Map();
               for (const s of sessions) {
                 const uid = s.user_id;
                 if (!uid) continue;
-                if (!userMap.has(uid)) userMap.set(uid, []);
-                if (userMap.get(uid).length < 3) userMap.get(uid).push(s.title || "(no title)");
+                if (!userMap.has(uid)) userMap.set(uid, { titles: [], count: 0 });
+                userMap.get(uid).count++;
+                if (userMap.get(uid).titles.length < 5) userMap.get(uid).titles.push(s.title || "(no title)");
               }
               const loginLabel = (uid) => {
                 if (uid.startsWith("google-oauth2|")) return "Google";
                 if (uid.startsWith("email|")) return "Email";
+                if (uid.startsWith("github|")) return "GitHub";
                 return uid.split("|")[0] || "Other";
               };
-              const byUser = [...userMap.entries()].map(([uid, titles]) => ({
-                uid, titles, loginType: loginLabel(uid),
-              }));
+              const byUser = [...userMap.entries()].map(([uid, { titles, count }]) => ({
+                uid, titles, count, loginType: loginLabel(uid),
+              })).sort((a, b) => b.count - a.count);
 
               res.writeHead(200, { "Content-Type": "text/html" });
               res.end(sessionPickerHtml(token, org_id, byUser));
@@ -572,9 +590,13 @@ ${byUser.map(({ uid, loginType, titles }) => `<div class="card">
     }
 
     case "create_devin_session":
+      if (!config.userId) {
+        return { error: "user_id not configured. Run /devin-setup and select your account to enable session creation." };
+      }
       return devinRequest("POST", `/organizations/${orgId}/sessions`, {
         prompt: args.prompt,
         ...(args.idempotent_client_id && { idempotent_client_id: args.idempotent_client_id }),
+        create_as_user_id: config.userId,
       });
 
     case "get_devin_session": {
