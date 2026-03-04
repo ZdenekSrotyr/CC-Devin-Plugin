@@ -1,6 +1,6 @@
 {
   "name": "devin-mcp-server",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "type": "module",
   "description": "MCP server for Devin AI API",
   "main": "index.js",

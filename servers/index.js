@@ -244,8 +244,8 @@ async function callTool(name, args = {}) {
   <input type="password" name="token" required placeholder="ey…" autocomplete="off">
   <label>Organization ID <a class="hint" href="https://app.devin.ai/settings/organization" target="_blank">↗ where to find it</a></label>
   <input type="text" name="org_id" required placeholder="org_…" autocomplete="off">
-  <label>User ID <span style="font-weight:400;color:#888">(optional — leave blank to auto-detect)</span></label>
-  <input type="text" name="user_id" placeholder="leave blank — we'll show you a picker" autocomplete="off">
+  <label>User ID or Email <span style="font-weight:400;color:#888">(optional)</span></label>
+  <input type="text" name="user_id" placeholder="your@email.com or leave blank" autocomplete="off">
   <button type="submit">Save credentials</button>
 </form>
 <p class="note">Saved to macOS Keychain + config file. Page closes automatically after saving.</p>
@@ -268,21 +268,28 @@ h1{color:#d1242f;}p{color:#555;}</style></head><body>
 <p><a href="/">Try again</a></p>
 </body></html>`;
 
-    const pickUserHtml = (token, org_id, userIds) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<title>Devin Setup — Pick your User ID</title>
+    const pickUserHtml = (token, org_id, members, notFoundMsg) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Devin Setup — Select your account</title>
 <style>
   body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 1rem;color:#111;}
-  h1{font-size:1.2rem;} p{color:#666;font-size:0.9rem;}
-  .uid{display:block;padding:0.6rem 0.8rem;margin:0.4rem 0;border:1px solid #ddd;border-radius:6px;
-       cursor:pointer;font-family:monospace;font-size:0.85rem;text-decoration:none;color:#111;}
-  .uid:hover{background:#f0f4ff;border-color:#0066cc;}
-  .skip{margin-top:1rem;font-size:0.8rem;color:#888;}
+  h1{font-size:1.2rem;}p.sub{color:#666;font-size:0.9rem;margin-top:0;}
+  p.warn{color:#8a4700;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:0.5rem 0.7rem;font-size:0.85rem;}
+  a.card{display:flex;flex-direction:column;gap:2px;border:1px solid #ddd;border-radius:8px;
+         margin:0.6rem 0;padding:0.7rem 1rem;text-decoration:none;color:#111;}
+  a.card:hover{background:#e8f0fe;border-color:#0066cc;}
+  .name{font-weight:600;font-size:0.95rem;}
+  .email{font-size:0.82rem;color:#555;}
+  .skip{margin-top:1.5rem;font-size:0.8rem;color:#888;text-align:center;}
   .skip a{color:#0066cc;}
 </style></head><body>
-<h1>Which User ID is yours?</h1>
-<p>Select your account — credentials will be saved immediately.</p>
-${userIds.map(uid => `<a class="uid" href="/save-userid?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(org_id)}&user_id=${encodeURIComponent(uid)}">${uid}</a>`).join("")}
-<p class="skip">Not sure? <a href="/save-userid?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(org_id)}&user_id=">Skip — save without User ID</a></p>
+<h1>Which account is yours?</h1>
+${notFoundMsg ? `<p class="warn">${notFoundMsg}</p>` : ""}
+<p class="sub">Select your account to enable personal session filtering.</p>
+${members.map(m => `<a class="card" href="/save-userid?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(org_id)}&user_id=${encodeURIComponent(m.user_id)}">
+  <span class="name">${m.name || "(no name)"}</span>
+  <span class="email">${m.email || m.user_id}</span>
+</a>`).join("")}
+<p class="skip"><a href="/save-userid?token=${encodeURIComponent(token)}&org_id=${encodeURIComponent(org_id)}&user_id=">Skip — save without user filtering</a></p>
 </body></html>`;
 
     const srv = createServer((req, res) => {
@@ -321,9 +328,8 @@ ${userIds.map(uid => `<a class="uid" href="/save-userid?token=${encodeURICompone
             return;
           }
           // Verify credentials
-          let sessions = [];
           try {
-            const apiRes = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=50`, {
+            const apiRes = await fetch(`${DEVIN_API_BASE}/organizations/${org_id}/sessions?first=1`, {
               headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
             });
             if (!apiRes.ok) {
@@ -332,15 +338,13 @@ ${userIds.map(uid => `<a class="uid" href="/save-userid?token=${encodeURICompone
               res.end(errorHtml(`API returned ${apiRes.status}: ${detail.slice(0, 100)}`));
               return;
             }
-            const data = await apiRes.json();
-            sessions = Array.isArray(data.items) ? data.items : [];
           } catch (e) {
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end(errorHtml(`Connection failed: ${e.message}`));
             return;
           }
 
-          // If user_id already looks valid, save directly
+          // Case 1: Already a valid Auth0 ID (contains |)
           if (user_id && user_id.includes("|")) {
             saveConfig(token, org_id, user_id);
             reloadConfig();
@@ -350,10 +354,56 @@ ${userIds.map(uid => `<a class="uid" href="/save-userid?token=${encodeURICompone
             return;
           }
 
-          // No valid user_id — show picker with unique IDs from sessions
-          const userIds = [...new Set(sessions.map(s => s.user_id).filter(Boolean))];
+          // Fetch org members for email lookup or picker
+          let members = [];
+          try {
+            const mRes = await fetch(
+              `https://api.devin.ai/v3/enterprise/organizations/${org_id}/members/users`,
+              { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
+            );
+            if (mRes.ok) {
+              const mData = await mRes.json();
+              members = Array.isArray(mData.items) ? mData.items : [];
+            }
+          } catch { /* ignore — picker will be skipped */ }
+
+          // Case 2: Email entered — resolve to user_id
+          if (user_id && user_id.includes("@")) {
+            const match = members.find(m => m.email?.toLowerCase() === user_id.toLowerCase());
+            if (match) {
+              saveConfig(token, org_id, match.user_id);
+              reloadConfig();
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(successHtml());
+              setTimeout(() => srv.close(), 1500);
+              return;
+            }
+            // Email not found in org — show picker with warning (or save without if no members)
+            if (members.length === 0) {
+              saveConfig(token, org_id, null);
+              reloadConfig();
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end(successHtml());
+              setTimeout(() => srv.close(), 1500);
+              return;
+            }
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end(pickUserHtml(token, org_id, members,
+              `Email "${user_id}" not found in your organization. Select your account below.`));
+            return;
+          }
+
+          // Case 3: Blank — show picker or save without user_id
+          if (members.length === 0) {
+            saveConfig(token, org_id, null);
+            reloadConfig();
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end(successHtml());
+            setTimeout(() => srv.close(), 1500);
+            return;
+          }
           res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(pickUserHtml(token, org_id, userIds));
+          res.end(pickUserHtml(token, org_id, members, null));
         });
         return;
       }
@@ -558,7 +608,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.13" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.14" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
