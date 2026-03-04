@@ -3,12 +3,7 @@
     "devin-mcp": {
       "type": "stdio",
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/index.js"],
-      "env": {
-        "DEVIN_API_TOKEN": "${DEVIN_API_TOKEN}",
-        "DEVIN_ORG_ID": "${DEVIN_ORG_ID}",
-        "DEVIN_USER_ID": "${DEVIN_USER_ID}"
-      }
+      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/index.js"]
     }
   }
 }
