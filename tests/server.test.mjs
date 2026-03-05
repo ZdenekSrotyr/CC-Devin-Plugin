@@ -71,6 +71,30 @@ test("marketplace.json version matches plugin.json version", () => {
     `marketplace has version ${entry.version}, plugin.json has ${plugin.version} — keep them in sync`);
 });
 
+test("marketplace.json has $schema field", () => {
+  const market = parseJSON(".claude-plugin/marketplace.json");
+  assert.ok(market["$schema"], "missing $schema — Claude Code may not recognise the marketplace");
+});
+
+test("marketplace.json has top-level description", () => {
+  const market = parseJSON(".claude-plugin/marketplace.json");
+  assert.ok(market.description, "missing description at marketplace level");
+});
+
+test("every plugin entry in marketplace.json has author field", () => {
+  const market = parseJSON(".claude-plugin/marketplace.json");
+  for (const entry of market.plugins) {
+    assert.ok(entry.author?.name, `plugin "${entry.name}" is missing author.name — required by Claude Code`);
+  }
+});
+
+test("servers/package.json version matches plugin.json version", () => {
+  const plugin  = parseJSON(".claude-plugin/plugin.json");
+  const pkg     = parseJSON("servers/package.json");
+  assert.equal(pkg.version, plugin.version,
+    `servers/package.json has ${pkg.version}, plugin.json has ${plugin.version}`);
+});
+
 test(".mcp.json defines devin-mcp server", () => {
   const mcp = parseJSON(".mcp.json");
   assert.ok(mcp.mcpServers?.["devin-mcp"], "missing devin-mcp server");
@@ -130,6 +154,14 @@ await new Promise((resolve, reject) => {
         assert.ok(r, "no response");
         assert.equal(r.result.protocolVersion, "2024-11-05");
         assert.equal(r.result.serverInfo.name, "devin-mcp");
+      });
+
+      test("server version in initialize matches plugin.json version", () => {
+        const r = get(1);
+        assert.ok(r, "no response");
+        const plugin = parseJSON(".claude-plugin/plugin.json");
+        assert.equal(r.result.serverInfo.version, plugin.version,
+          `serverInfo.version ${r.result.serverInfo.version} != plugin.json ${plugin.version} — update servers/index.js`);
       });
 
       test(`tools/list returns all ${EXPECTED_TOOLS.length} tools`, () => {
