@@ -549,7 +549,7 @@ ${byUser.map(({ uid, loginType, titles, count }) => `<div class="card">
     case "list_devin_sessions": {
       const mineOnly = args.mine_only !== false;
       const limit = Math.min(args.limit || 10, 50);
-      const statusArg = args.status ?? ["running"];
+      const statusArg = args.status ?? (mineOnly ? "all" : ["running"]);
       const statusFilter = statusArg === "all" ? null
                          : Array.isArray(statusArg) ? statusArg : [statusArg];
       const includeArchived = args.include_archived === true;
@@ -615,8 +615,13 @@ ${byUser.map(({ uid, loginType, titles, count }) => `<div class="card">
         if (e.message.includes("403")) {
           const data = await devinRequest("GET", `/organizations/${orgId}/sessions?session_ids=${args.session_id}&first=1`).catch(() => null);
           const session = data && (data.items || [])[0];
-          if (session && session.status !== "waiting") {
-            return { error: `Cannot send message — session is in '${session.status}' state. Messages can only be sent when Devin is waiting for input. Use get_devin_session to check status.` };
+          if (session) {
+            if (config.userId && session.user_id && session.user_id !== config.userId) {
+              return { error: `Cannot send message — session belongs to a different user (${session.user_id}). You can only send messages to your own sessions.` };
+            }
+            if (session.status_detail !== "waiting_for_user") {
+              return { error: `Cannot send message — session status_detail is '${session.status_detail}' (status: '${session.status}'). Messages can only be sent when Devin is waiting for user input.` };
+            }
           }
         }
         throw e;
@@ -682,7 +687,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.19" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.20" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
