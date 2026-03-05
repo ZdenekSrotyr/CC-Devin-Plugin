@@ -606,10 +606,22 @@ ${byUser.map(({ uid, loginType, titles, count }) => `<div class="card">
       return session;
     }
 
-    case "send_devin_message":
-      return devinRequest("POST", `/organizations/${orgId}/sessions/${args.session_id}/messages`, {
-        message: args.message,
-      });
+    case "send_devin_message": {
+      try {
+        return await devinRequest("POST", `/organizations/${orgId}/sessions/${args.session_id}/messages`, {
+          message: args.message,
+        });
+      } catch (e) {
+        if (e.message.includes("403")) {
+          const data = await devinRequest("GET", `/organizations/${orgId}/sessions?session_ids=${args.session_id}&first=1`).catch(() => null);
+          const session = data && (data.items || [])[0];
+          if (session && session.status !== "waiting") {
+            return { error: `Cannot send message — session is in '${session.status}' state. Messages can only be sent when Devin is waiting for input. Use get_devin_session to check status.` };
+          }
+        }
+        throw e;
+      }
+    }
 
     case "get_devin_stats": {
       const mineOnly = args.mine_only === true;
@@ -670,7 +682,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
-      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.18" } });
+      ok(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "devin-mcp", version: "0.3.19" } });
     } else if (method === "tools/list") {
       ok(id, { tools: TOOLS });
     } else if (method === "tools/call") {
